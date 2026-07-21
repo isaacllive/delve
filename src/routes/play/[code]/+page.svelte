@@ -22,6 +22,7 @@
     showAllTerrain: true,
     hideCeiling: false,
     useFigures: true,
+    voxelTerrain: false,
     ambient: 0.4,
   });
 
@@ -147,6 +148,7 @@
       debugHideCeiling={debugFlags.hideCeiling}
       debugAmbient={debugFlags.ambient}
       useFigures={debugFlags.useFigures}
+      useVoxelTerrain={debugFlags.voxelTerrain}
     />
     <Hud
       {client}

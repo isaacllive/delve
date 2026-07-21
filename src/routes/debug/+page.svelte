@@ -68,6 +68,7 @@
   <header>
     <a href="/">← Delve</a>
     <a href="/debug/models">Model gallery →</a>
+    <a href="/debug/view3d">3D view →</a>
     <label>seed <input bind:value={seed} /></label>
     <div class="levels">
       <button onclick={() => (levelIdx = Math.max(0, levelIdx - 1))}>◀</button>
