@@ -21,6 +21,8 @@
   import { hasLineOfSight } from '$lib/game/los.ts';
   import { cellVisibility, type VisionSource } from '$lib/game/vision.ts';
   import { cellLitByLights } from '$lib/game/lighting.ts';
+  import { MODEL_BY_ID, pickMiniId, makeKit, type ModelKit } from '$lib/models3d/index.ts';
+  import { disposeObject3D } from '$lib/threeDispose.ts';
 
   let {
     level,
@@ -31,6 +33,17 @@
     tick,
     bossDefeated = false,
     onYaw,
+    // ── DEBUG toggles ───────────────────────────────────────────────────────
+    // Exposed as props so the in-game debug menu can flip them live. Defaults
+    // preserve the current dev view: all terrain shown (no fog), ceiling on.
+    // Set showAllTerrain=false + hideCeiling=false to restore fog-of-war under
+    // an enclosed roof.
+    debugShowAllTerrain = true,
+    debugHideCeiling = false,
+    debugAmbient = 0.4,
+    // Render monsters/players as procedural figures (imported minis) instead of
+    // the plain octahedron/capsule primitives. Toggle off to fall back.
+    useFigures = true,
   }: {
     level: DungeonLevel;
     players: PlayerState[];
@@ -42,15 +55,11 @@
     /** Reports the camera's azimuth (radians) whenever it changes, so the HUD
      *  compass can orient relative to the current view. */
     onYaw?: (yaw: number) => void;
+    debugShowAllTerrain?: boolean;
+    debugHideCeiling?: boolean;
+    debugAmbient?: number;
+    useFigures?: boolean;
   } = $props();
-
-  // ── DEBUG toggles ─────────────────────────────────────────────────────────
-  // While debugging terrain, keep ALL terrain visible (lit, never hidden by
-  // vision range / fog) and drop the ceiling so the caves are easy to read.
-  // Flip these back to false to restore fog-of-war + the enclosed roof.
-  const DEBUG_SHOW_ALL_TERRAIN = true;
-  const DEBUG_HIDE_CEILING = false;
-  const DEBUG_AMBIENT = 0.4; // brightness floor for unlit terrain in debug mode
 
   let host: HTMLDivElement;
   // Three.js handles (kept out of $state — no reactivity needed).
@@ -67,6 +76,13 @@
   let ceilMatrix: import('three').Matrix4[] = [];
   let avatarGroup: import('three').Group | null = null;
   let torchLights: import('three').PointLight[] = [];
+  // Procedural-figure toolkit (built once THREE loads) + a template cache. Each
+  // distinct (modelId, tint) is built ONCE into a lit Group; per-instance
+  // avatars are cheap clones sharing that geometry/material. Clones are tagged
+  // userData.shared so the refresh teardown (disposeObject3D skipShared) frees
+  // the throwaway primitives but never the cached templates.
+  let kit: ModelKit | null = null;
+  const figTemplates = new Map<string, import('three').Group>();
   let raf = 0;
   let disposed = false;
   // Flipped true once the async Three.js init finishes. It's $state so the
@@ -206,6 +222,7 @@
     THREE = await import('three');
     const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
     if (disposed) return;
+    kit = makeKit(THREE);
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x06070a);
@@ -407,14 +424,14 @@
         }
 
         if (bright > 0) revealed[i] = true;
-        const shown = DEBUG_SHOW_ALL_TERRAIN || revealed[i];
+        const shown = debugShowAllTerrain || revealed[i];
         const isWall = l.cells[i].kind === 'wall';
 
         // ── Ceiling: a continuous rock ROOF over every open cell you can see
         // (walls already rise to the same roof, so wall + ceiling read as one
         // rock shell — Minecraft-cave style). Lit by the same brightness as the
         // floor; the camera→character tunnel dissolves whatever's in the way.
-        if (!DEBUG_HIDE_CEILING && shown && !isWall) {
+        if (!debugHideCeiling && shown && !isWall) {
           const lvlC = 0.14 + 0.7 * bright;
           rockCol.setRGB(
             (((curRock >> 16) & 255) / 255) * lvlC + warm.r * 0.14 * bright,
@@ -428,13 +445,13 @@
 
         // Terrain: one CONTINUOUS ramp from dim (bright 0) up to fully lit
         // (bright 1), so the edge of vision fades smoothly with no step. In
-        // DEBUG_SHOW_ALL_TERRAIN mode every cell is shown with an ambient floor
+        // debugShowAllTerrain mode every cell is shown with an ambient floor
         // so the whole cave is visible while lighting still highlights it.
         if (!shown) {
           setTerr(i, 0, 0, 0, 0);
         } else {
           const base = baseColor[i];
-          const floor = DEBUG_SHOW_ALL_TERRAIN ? DEBUG_AMBIENT : 0.14;
+          const floor = debugShowAllTerrain ? debugAmbient : 0.14;
           const lvl = Math.max(floor, floor + (1 - floor) * bright);
           const mix = 0.28 * bright;
           col.setRGB(
@@ -568,28 +585,76 @@
     torchLights.push(pl);
   }
 
+  // Each delver class → the PC mini that best fits its fantasy. Falls back to
+  // keyword matching, then a plain commoner, so a figure always renders.
+  const CLASS_MINI: Record<string, string> = {
+    warden: 'knight',
+    ranger: 'ranger',
+    delver: 'hooded-rogue',
+    mystic: 'mystic-oracle',
+  };
+
+  /** A CSS hex string for a THREE colour number (monster colours arrive as
+   *  0xRRGGBB ints; the model builders + minis want a `#rrggbb` tint). */
+  function hexColor(n: number): string {
+    return '#' + (n & 0xffffff).toString(16).padStart(6, '0');
+  }
+
+  /** A ready-to-place clone of the procedural figure for `modelId` tinted
+   *  `tint`, or null if the model id is unknown. The first request for a given
+   *  (id, tint) builds + caches the template; every later one is a clone that
+   *  shares the template's geometry/materials (tagged shared so refresh
+   *  teardown leaves them intact). */
+  function figureFor(modelId: string, tint: string): import('three').Group | null {
+    if (!kit) return null;
+    const def = MODEL_BY_ID[modelId];
+    if (!def) return null;
+    const key = modelId + '|' + tint;
+    let template = figTemplates.get(key);
+    if (!template) {
+      template = def.build(kit, tint);
+      figTemplates.set(key, template);
+    }
+    const clone = template.clone(true);
+    clone.traverse((o) => (o.userData.shared = true));
+    return clone;
+  }
+
   function refreshAvatars(viewers: PlayerState[]) {
     if (!avatarGroup || !THREE || !scene) return;
     // Rebuild the small avatar set + torch lights each update (cheap: a handful).
     for (const l of torchLights) scene.remove(l);
     torchLights = [];
+    // Free throwaway primitives (rings, arrows, loot, fallback shapes) but keep
+    // the cached figure geometry/materials that clones share (userData.shared).
     while (avatarGroup.children.length) {
       const c = avatarGroup.children.pop()!;
-      (c as any).geometry?.dispose?.();
-      (c as any).material?.dispose?.();
+      disposeObject3D(c, { skipShared: true });
     }
 
-    // Monsters — an octahedron per foe (the boss looms large and red-lit),
-    // rendered over the terrain so they read clearly against the rock.
+    // Monsters — a procedural creature figure picked from the foe's name
+    // (goblin, skeleton, wolf…). Bosses loom large and cast a red light. When
+    // no mini matches (or figures are disabled) fall back to the classic
+    // octahedron so a foe is never invisible.
     for (const mo of monsters) {
-      const r = mo.boss ? 0.85 : 0.34;
-      const mesh = new THREE.Mesh(
-        new THREE.OctahedronGeometry(r),
-        new THREE.MeshBasicMaterial({ color: mo.color, depthTest: false }),
-      );
-      mesh.position.set(mo.col, (mo.boss ? 0.9 : 0.5), mo.row);
-      mesh.renderOrder = 16;
-      avatarGroup.add(mesh);
+      const miniId = useFigures ? pickMiniId(mo.name) : null;
+      const fig = miniId ? figureFor(miniId, hexColor(mo.color)) : null;
+      if (fig) {
+        // Recipe figures stand ~1.1 units tall, base on y=0; scale bosses up.
+        fig.scale.setScalar(mo.boss ? 2.1 : 1);
+        fig.position.set(mo.col, 0, mo.row);
+        fig.renderOrder = 16;
+        avatarGroup.add(fig);
+      } else {
+        const r = mo.boss ? 0.85 : 0.34;
+        const mesh = new THREE.Mesh(
+          new THREE.OctahedronGeometry(r),
+          new THREE.MeshBasicMaterial({ color: mo.color, depthTest: false }),
+        );
+        mesh.position.set(mo.col, mo.boss ? 0.9 : 0.5, mo.row);
+        mesh.renderOrder = 16;
+        avatarGroup.add(mesh);
+      }
       if (mo.boss) {
         const bl = new THREE.PointLight(0xff2020, 2.4, 14, 1.6);
         bl.position.set(mo.col, 1.4, mo.row);
@@ -633,20 +698,34 @@
 
     for (const p of viewers) {
       const isYou = p.id === youId;
-      // The avatar renders THROUGH the cave rock (depthTest off + high
-      // renderOrder) so tall walls between the camera and the character never
-      // hide it — the "visual hole" that keeps your delver always in view.
-      const geo = new THREE.CapsuleGeometry(0.28, 0.5, 4, 8);
-      const mat = new THREE.MeshBasicMaterial({
-        color: p.color,
-        depthTest: false,
-        transparent: true,
-        opacity: isYou ? 1 : 0.92,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(p.col, p.elevation + 0.55, p.row);
-      mesh.renderOrder = 20;
-      avatarGroup.add(mesh);
+      // Body: a procedural class figure (knight / ranger / rogue / oracle),
+      // yawed to the delver's heading. The ring + arrow + beam below stay
+      // depthTest-off locators, and the occluder cutaway clears rock between the
+      // camera and the character, so the figure never gets lost behind a wall.
+      // Heading 0 = North (−z); a figure faces +z, so yaw = π − facing.
+      const classMini = useFigures
+        ? CLASS_MINI[p.classId] ?? pickMiniId(`${p.classId} ${p.name}`) ?? 'commoner'
+        : null;
+      const fig = classMini ? figureFor(classMini, p.color) : null;
+      if (fig) {
+        fig.position.set(p.col, p.elevation, p.row);
+        fig.rotation.y = Math.PI - p.facing;
+        if (!isYou) fig.scale.multiplyScalar(0.98); // subtle: others read slightly smaller
+        avatarGroup.add(fig);
+      } else {
+        // Fallback: the classic through-rock capsule (depthTest off).
+        const geo = new THREE.CapsuleGeometry(0.28, 0.5, 4, 8);
+        const mat = new THREE.MeshBasicMaterial({
+          color: p.color,
+          depthTest: false,
+          transparent: true,
+          opacity: isYou ? 1 : 0.92,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(p.col, p.elevation + 0.55, p.row);
+        mesh.renderOrder = 20;
+        avatarGroup.add(mesh);
+      }
 
       // Facing arrow: a flat cone pointing the way the delver is heading.
       // Heading 0 = North (−z), clockwise, so dir = (sin, 0, −cos).
@@ -856,6 +935,10 @@
     disposed = true;
     cancelAnimationFrame(raf);
     window.removeEventListener('resize', resize);
+    // Free the cached figure templates (clones only ever shared these, so
+    // nothing else owns them now).
+    for (const t of figTemplates.values()) disposeObject3D(t);
+    figTemplates.clear();
     renderer?.dispose();
     renderer?.domElement.remove();
   });

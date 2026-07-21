@@ -1,0 +1,33 @@
+{
+  "name": "Gnome Bard",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "bard",
+  "species": "gnome",
+  "genderPresentation": "masculine",
+  "bodyType": "small_expressive",
+  "silhouette": "mid_performance",
+  "armorWeight": "light",
+  "poseFamily": "performance_pose",
+  "poseIntensity": 0.75,
+  "mood": "showstopper",
+  "gear": ["lute", "rapier", "feather_cap", "sash"],
+  "classMarkers": ["music_motif"],
+  "speciesMarkers": ["small_and_nimble", "topknot"],
+  "baseTheme": "tavern_stage",
+  "materials": {
+    "skin": "warm_skin",
+    "cloth": "wine_red",
+    "cloth2": "royal_purple",
+    "metal": "gold",
+    "leather": "tan_leather",
+    "hair": "ginger"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "medium",
+    "notes": ["rapier blade thickened well past realistic", "feather sculpted as a solid plume", "lute neck kept short and chunky"]
+  }
+}

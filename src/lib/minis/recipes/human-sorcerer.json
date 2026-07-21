@@ -1,0 +1,32 @@
+{
+  "name": "Human Sorcerer",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "sorcerer",
+  "species": "human",
+  "genderPresentation": "feminine",
+  "bodyType": "poised",
+  "silhouette": "rising_energy",
+  "armorWeight": "none",
+  "poseFamily": "spell_hurl",
+  "poseIntensity": 0.8,
+  "mood": "storm_in_the_blood",
+  "gear": ["magic_hands", "sash"],
+  "classMarkers": ["arcane_glow", "full_robe"],
+  "speciesMarkers": ["long_hair"],
+  "baseTheme": "magic_swirl",
+  "materials": {
+    "skin": "warm_skin",
+    "cloth": "flame_orange",
+    "cloth2": "wine_red",
+    "magic": "ember_orange",
+    "hair": "black_hair"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "medium",
+    "notes": ["energy wisps oversized so they survive printing", "swirl anchored to the base", "no thin floating parts near the hands"]
+  }
+}

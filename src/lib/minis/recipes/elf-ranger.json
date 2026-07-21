@@ -1,0 +1,32 @@
+{
+  "name": "Elf Ranger",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "ranger",
+  "species": "elf",
+  "genderPresentation": "feminine",
+  "bodyType": "lithe",
+  "silhouette": "drawn_bow_profile",
+  "armorWeight": "light",
+  "poseFamily": "bow_drawn",
+  "poseIntensity": 0.8,
+  "mood": "silent_aim",
+  "gear": ["bow", "quiver", "cloak"],
+  "classMarkers": ["wilderness_gear"],
+  "speciesMarkers": ["pointed_ears", "long_hair"],
+  "baseTheme": "forest",
+  "materials": {
+    "skin": "tan_skin",
+    "cloth": "forest_green",
+    "cloth2": "deep_green",
+    "leather": "dark_brown",
+    "hair": "blonde"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "medium",
+    "notes": ["bow limbs thickened", "bowstring rendered as bold cord"]
+  }
+}

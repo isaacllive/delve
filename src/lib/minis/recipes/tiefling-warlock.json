@@ -1,0 +1,34 @@
+{
+  "name": "Tiefling Warlock",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "warlock",
+  "species": "tiefling",
+  "genderPresentation": "feminine",
+  "bodyType": "elegant_sinister",
+  "silhouette": "asymmetric_occult",
+  "armorWeight": "light",
+  "poseFamily": "eldritch_cast",
+  "poseIntensity": 0.75,
+  "mood": "pact_price_paid",
+  "gear": ["eldritch_flame", "occult_tome", "cloak"],
+  "classMarkers": ["infernal_motif", "half_robe"],
+  "speciesMarkers": ["horns", "tail", "long_hair"],
+  "baseTheme": "cracked_ritual",
+  "materials": {
+    "skin": "crimson_skin",
+    "cloth": "midnight_blue",
+    "cloth2": "royal_purple",
+    "leather": "black_leather",
+    "magic": "eldritch_green",
+    "bone": "ivory",
+    "hair": "black_hair"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "medium",
+    "notes": ["horns swept back and fused to skull", "tail curled low near the base", "flame is a solid sculpted lick"]
+  }
+}
