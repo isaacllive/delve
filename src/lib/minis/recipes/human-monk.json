@@ -1,0 +1,31 @@
+{
+  "name": "Human Monk",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "monk",
+  "species": "human",
+  "genderPresentation": "androgynous",
+  "bodyType": "lean_martial",
+  "silhouette": "clean_balanced",
+  "armorWeight": "none",
+  "poseFamily": "staff_sweep",
+  "poseIntensity": 0.7,
+  "mood": "still_water",
+  "gear": ["monk_staff", "hand_wraps", "sash"],
+  "classMarkers": ["monk_wraps"],
+  "speciesMarkers": ["bald"],
+  "baseTheme": "training_stone",
+  "materials": {
+    "skin": "deep_skin",
+    "cloth": "ochre",
+    "cloth2": "wine_red",
+    "leather": "tan_leather"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["staff is one thick pole", "wraps sculpted as banded masses", "wide stable stance"]
+  }
+}

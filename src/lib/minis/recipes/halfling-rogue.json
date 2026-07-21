@@ -1,0 +1,32 @@
+{
+  "name": "Halfling Rogue",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "rogue",
+  "species": "halfling",
+  "genderPresentation": "androgynous",
+  "bodyType": "small_nimble",
+  "silhouette": "low_coiled",
+  "armorWeight": "light",
+  "poseFamily": "assassin_lunge",
+  "poseIntensity": 0.75,
+  "mood": "sly_ready",
+  "gear": ["dual_daggers", "hooded_cloak", "utility_belt"],
+  "classMarkers": ["hood_up", "sneak_gear"],
+  "speciesMarkers": ["small_and_nimble"],
+  "baseTheme": "shadow_stone",
+  "materials": {
+    "skin": "warm_skin",
+    "cloth": "charcoal",
+    "cloth2": "midnight_blue",
+    "leather": "black_leather",
+    "hair": "chestnut"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["daggers chunky", "cloak fused to back", "crouch keeps limbs supported"]
+  }
+}

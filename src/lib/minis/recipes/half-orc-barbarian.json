@@ -1,0 +1,32 @@
+{
+  "name": "Half-Orc Barbarian",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "32mm_round",
+  "class": "barbarian",
+  "species": "half_orc",
+  "genderPresentation": "masculine",
+  "bodyType": "massive_muscular",
+  "silhouette": "wide_aggressive",
+  "armorWeight": "none",
+  "poseFamily": "rage_charge",
+  "poseIntensity": 0.85,
+  "mood": "roaring_fury",
+  "gear": ["great_axe", "fur_mantle", "belt_pouch"],
+  "classMarkers": ["trophy_straps"],
+  "speciesMarkers": ["tusks", "heavy_jaw", "topknot"],
+  "baseTheme": "rocky_battlefield",
+  "materials": {
+    "skin": "green_skin",
+    "leather": "dark_brown",
+    "fur": "brown_fur",
+    "cloth": "red_leather",
+    "hair": "black_hair"
+  },
+  "joinRules": { "body": "smooth", "hair": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.4,
+    "fragileRisk": "low",
+    "notes": ["axe haft oversized", "charge pose kept balanced over the base", "fur mantle fused into shoulder mass"]
+  }
+}

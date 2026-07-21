@@ -1,0 +1,32 @@
+{
+  "name": "Human Fighter",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "fighter",
+  "species": "human",
+  "genderPresentation": "masculine",
+  "bodyType": "athletic",
+  "silhouette": "grounded_martial",
+  "armorWeight": "medium",
+  "poseFamily": "sword_lunge",
+  "poseIntensity": 0.65,
+  "mood": "confident_veteran",
+  "gear": ["sword", "heater_shield", "belt_pouch"],
+  "classMarkers": [],
+  "speciesMarkers": ["short_hair"],
+  "baseTheme": "dungeon_stone",
+  "materials": {
+    "skin": "warm_skin",
+    "cloth": "charcoal",
+    "leather": "dark_brown",
+    "metal": "brushed_steel",
+    "hair": "brown_hair"
+  },
+  "joinRules": { "body": "smooth", "armor": "beveled", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["blade thickened", "shield strapped tight to forearm"]
+  }
+}

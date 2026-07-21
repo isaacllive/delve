@@ -1,0 +1,33 @@
+{
+  "name": "Dwarf Cleric of the Sun",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "cleric",
+  "species": "dwarf",
+  "genderPresentation": "masculine",
+  "bodyType": "short_broad",
+  "silhouette": "compact_protective",
+  "armorWeight": "medium",
+  "poseFamily": "smite_strike",
+  "poseIntensity": 0.45,
+  "mood": "steadfast_protective",
+  "gear": ["warhammer", "round_shield", "holy_symbol_necklace", "belt_pouch"],
+  "classMarkers": ["holy_symbol", "robe_and_armor_mix"],
+  "speciesMarkers": ["short_stout_body", "braided_beard", "broad_nose"],
+  "baseTheme": "temple_ruins",
+  "materials": {
+    "skin": "warm_skin",
+    "cloth": "cream_robes",
+    "metal": "brushed_steel",
+    "leather": "dark_brown",
+    "magic": "soft_gold",
+    "hair": "ginger"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "hair": "smooth", "armor": "beveled", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["weapon handle thickened", "shield connected close to body", "beard sculpted as one mass"]
+  }
+}

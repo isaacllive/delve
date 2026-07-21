@@ -1,0 +1,33 @@
+{
+  "name": "Dragonborn Paladin",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "32mm_round",
+  "class": "paladin",
+  "species": "dragonborn",
+  "genderPresentation": "masculine",
+  "bodyType": "broad_heavy",
+  "silhouette": "towering_bulwark",
+  "armorWeight": "heavy",
+  "poseFamily": "shield_bash",
+  "poseIntensity": 0.55,
+  "mood": "unshakeable_oath",
+  "gear": ["sword", "heater_shield", "tabard"],
+  "classMarkers": ["radiant_motif", "holy_symbol"],
+  "speciesMarkers": ["draconic_head", "scaled_hide", "tail"],
+  "baseTheme": "sacred_stone",
+  "materials": {
+    "skin": "bronze_scale_skin",
+    "scale": "bronze_scale",
+    "metal": "brushed_steel",
+    "metal2": "gold",
+    "cloth2": "cream_robes",
+    "magic": "holy_white"
+  },
+  "joinRules": { "body": "smooth", "armor": "beveled", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.4,
+    "fragileRisk": "low",
+    "notes": ["tail curled against base mass", "horn frill kept chunky", "32mm base for the larger silhouette"]
+  }
+}

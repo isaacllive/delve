@@ -1,0 +1,32 @@
+{
+  "name": "Elf Wizard",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "wizard",
+  "species": "elf",
+  "genderPresentation": "feminine",
+  "bodyType": "slender",
+  "silhouette": "flowing_vertical",
+  "armorWeight": "none",
+  "poseFamily": "spell_hurl",
+  "poseIntensity": 0.7,
+  "mood": "serene_focus",
+  "gear": ["wizard_staff", "spellbook"],
+  "classMarkers": ["full_robe", "arcane_glow"],
+  "speciesMarkers": ["pointed_ears", "long_hair"],
+  "baseTheme": "arcane_runes",
+  "materials": {
+    "skin": "pale_skin",
+    "cloth": "arcane_blue",
+    "cloth2": "midnight_blue",
+    "magic": "arcane_cyan",
+    "hair": "silver_hair"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["staff thickened", "robe sculpted as one solid flare", "hair fused into a single mass"]
+  }
+}

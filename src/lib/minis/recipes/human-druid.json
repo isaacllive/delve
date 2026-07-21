@@ -1,0 +1,33 @@
+{
+  "name": "Human Druid",
+  "category": "player_character_mini",
+  "scale": "32mm_heroic",
+  "baseSize": "25mm_round",
+  "class": "druid",
+  "species": "human",
+  "genderPresentation": "feminine",
+  "bodyType": "weathered",
+  "silhouette": "rooted_mystic",
+  "armorWeight": "light",
+  "poseFamily": "wild_surge",
+  "poseIntensity": 0.6,
+  "mood": "grounded_wild",
+  "gear": ["nature_staff", "leaf_charms"],
+  "classMarkers": ["nature_motif", "half_robe", "arcane_glow"],
+  "speciesMarkers": ["long_hair"],
+  "baseTheme": "root_mushroom",
+  "materials": {
+    "skin": "tan_skin",
+    "cloth": "deep_green",
+    "cloth2": "ochre",
+    "leather": "tan_leather",
+    "magic": "nature_green",
+    "hair": "dark_red_hair"
+  },
+  "joinRules": { "body": "smooth", "cloth": "smooth", "weapons": "hard", "base": "hard" },
+  "printSafety": {
+    "minThicknessMm": 1.2,
+    "fragileRisk": "low",
+    "notes": ["staff antlers kept thick", "charms fused to cord", "leaves sculpted as chunky pads"]
+  }
+}
