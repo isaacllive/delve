@@ -14,6 +14,7 @@
     showAllTerrain: boolean;
     hideCeiling: boolean;
     useFigures: boolean;
+    voxelTerrain: boolean;
     ambient: number;
   }
 
@@ -45,6 +46,7 @@
     <label><input type="checkbox" bind:checked={flags.showAllTerrain} /> Show all terrain (fog off)</label>
     <label><input type="checkbox" bind:checked={flags.hideCeiling} /> Hide ceiling</label>
     <label><input type="checkbox" bind:checked={flags.useFigures} /> Procedural figures</label>
+    <label><input type="checkbox" bind:checked={flags.voxelTerrain} /> Voxel terrain mesh</label>
     <label class="slider">
       Ambient <input type="range" min="0" max="1" step="0.05" bind:value={flags.ambient} />
       <span class="num">{flags.ambient.toFixed(2)}</span>

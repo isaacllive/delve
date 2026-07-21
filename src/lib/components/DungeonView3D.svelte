@@ -23,6 +23,7 @@
   import { cellLitByLights } from '$lib/game/lighting.ts';
   import { MODEL_BY_ID, pickMiniId, makeKit, type ModelKit } from '$lib/models3d/index.ts';
   import { disposeObject3D } from '$lib/threeDispose.ts';
+  import { VoxelTerrain } from '$lib/components/voxelTerrain.ts';
 
   let {
     level,
@@ -44,6 +45,10 @@
     // Render monsters/players as procedural figures (imported minis) instead of
     // the plain octahedron/capsule primitives. Toggle off to fall back.
     useFigures = true,
+    // Render the floor/roof as a real face-culled VOXEL MESH (voxel engine)
+    // instead of the per-cell InstancedMesh boxes. Same 2D vision/fog — it's
+    // just fed to the voxel shader's per-cell light/alpha texture.
+    useVoxelTerrain = false,
   }: {
     level: DungeonLevel;
     players: PlayerState[];
@@ -59,6 +64,7 @@
     debugHideCeiling?: boolean;
     debugAmbient?: number;
     useFigures?: boolean;
+    useVoxelTerrain?: boolean;
   } = $props();
 
   let host: HTMLDivElement;
@@ -74,6 +80,13 @@
   // can still see down onto your character (the "visual hole", extended up).
   let ceiling: import('three').InstancedMesh | null = null;
   let ceilMatrix: import('three').Matrix4[] = [];
+  // Alternate face-culled voxel-mesh floor/roof (built lazily when
+  // useVoxelTerrain is on). Fed the same per-cell brightness/reveal the
+  // instanced path computes, via its light/alpha shader texture.
+  let voxelTerrain: VoxelTerrain | null = null;
+  let voxelBuiltKey = '';
+  let voxBright = new Float32Array(0); // per-cell target brightness (0..1)
+  let voxDirty = false; // light/alpha changed → re-upload next frame
   let avatarGroup: import('three').Group | null = null;
   let torchLights: import('three').PointLight[] = [];
   // Procedural-figure toolkit (built once THREE loads) + a template cache. Each
@@ -327,6 +340,7 @@
     ceilFade = new Float32Array(count);
     occFade = new Float32Array(count);
     occFadeCeil = new Float32Array(count);
+    voxBright = new Float32Array(count);
     curCols = l.cols;
     occActive.clear();
     occActiveCeil.clear();
@@ -375,6 +389,35 @@
     scene.add(terrain);
     scene.add(ceiling);
     builtLevelKey = levelKey(l);
+    // A fresh level invalidates any voxel mesh; syncTerrainMode rebuilds it for
+    // the new floor if the voxel path is active.
+    voxelBuiltKey = '';
+    syncTerrainMode(l);
+  }
+
+  /** Reconcile which terrain renderer is visible with `useVoxelTerrain`. When
+   *  the voxel path is on, hide the instanced floor/roof and (lazily) build +
+   *  show the voxel mesh for this level; when off, hide the voxel mesh and show
+   *  the instanced meshes. Cheap enough to call from the reactive effect so the
+   *  debug toggle flips live. */
+  function syncTerrainMode(l: DungeonLevel) {
+    if (!scene || !THREE) return;
+    const useVox = useVoxelTerrain;
+    if (terrain) terrain.visible = !useVox;
+    if (ceiling) ceiling.visible = !useVox;
+    if (useVox) {
+      if (!voxelTerrain) voxelTerrain = new VoxelTerrain(THREE, scene);
+      const key = levelKey(l);
+      if (voxelBuiltKey !== key) {
+        voxelTerrain.build(l, l.palette);
+        voxelBuiltKey = key;
+        voxDirty = true;
+      }
+      if (voxelTerrain.mesh) voxelTerrain.mesh.visible = true;
+      voxDirty = true; // re-upload light/alpha now that the mesh is showing
+    } else if (voxelTerrain?.mesh) {
+      voxelTerrain.mesh.visible = false;
+    }
   }
 
   const warm = { r: 1.0, g: 0.72, b: 0.42 };
@@ -449,6 +492,7 @@
         // so the whole cave is visible while lighting still highlights it.
         if (!shown) {
           setTerr(i, 0, 0, 0, 0);
+          voxBright[i] = 0;
         } else {
           const base = baseColor[i];
           const floor = debugShowAllTerrain ? debugAmbient : 0.14;
@@ -460,9 +504,14 @@
             base.b * lvl * (1 - mix) + tb * mix,
           );
           setTerr(i, col.r, col.g, col.b, 1);
+          // Voxel path: the mesher already baked palette colour × face shade, so
+          // the shader only needs this brightness scalar (the fade + occluder
+          // cutout are folded into alpha each frame in animate()).
+          voxBright[i] = lvl;
         }
       }
     }
+    voxDirty = true;
     terrain.instanceMatrix.needsUpdate = true;
     if (terrain.instanceColor) terrain.instanceColor.needsUpdate = true;
     if (alphaAttr) alphaAttr.needsUpdate = true;
@@ -552,6 +601,26 @@
       if (ceiling.instanceColor) ceiling.instanceColor.needsUpdate = true;
       if (ceilAlphaAttr) ceilAlphaAttr.needsUpdate = true;
     }
+  }
+
+  /** Push the current per-cell brightness + reveal into the voxel shader's
+   *  light/alpha texture. Runs each frame while the voxel path is active, but
+   *  only re-uploads when something changed (fog tick, an in-flight reveal
+   *  fade, or an occluder cutout easing) so an idle scene costs nothing. Alpha
+   *  = reveal-fade × (1 − roof-occluder), mirroring the instanced ceiling so
+   *  the camera→delver tunnel opens the same way. */
+  function syncVoxelTerrain() {
+    if (!useVoxelTerrain || !voxelTerrain?.mesh) return;
+    if (!voxDirty && terrFadeSet.size === 0 && occActiveCeil.size === 0) return;
+    const L = voxelTerrain.light;
+    const A = voxelTerrain.alpha;
+    const n = voxBright.length;
+    for (let i = 0; i < n; i++) {
+      L[i] = voxBright[i];
+      A[i] = terrFade[i] * (1 - OCC_MAX * occFadeCeil[i]);
+    }
+    voxelTerrain.upload();
+    voxDirty = false;
   }
 
   let ZERO_SCALE: import('three').Matrix4;
@@ -797,6 +866,7 @@
     const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0.016;
     lastFrame = now;
     stepFades(dt);
+    syncVoxelTerrain();
     // Pan the camera position by however much the follow-target moved, so the
     // rig travels with the player while keeping the user's orbit/zoom offset.
     if (camInit) {
@@ -939,6 +1009,8 @@
     // nothing else owns them now).
     for (const t of figTemplates.values()) disposeObject3D(t);
     figTemplates.clear();
+    voxelTerrain?.dispose();
+    voxelTerrain = null;
     renderer?.dispose();
     renderer?.domElement.remove();
   });
@@ -993,6 +1065,10 @@
       desiredAz = -you.facing;
       meCell = { col: you.col, row: you.row, elev: you.elevation };
     }
+
+    // Flip the terrain renderer to match the live debug toggle (reads
+    // useVoxelTerrain so this effect re-runs when it changes).
+    syncTerrainMode(l);
 
     const sameLevel = ps.filter((p) => p.level === myLevel);
     updateFogAndActors(l, sameLevel, you);
