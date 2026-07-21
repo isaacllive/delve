@@ -2,18 +2,22 @@
   import type { GameClient } from '$lib/net.svelte.ts';
   import { compassLabel } from '$lib/game/protocol.ts';
   import { getClass } from '$lib/game/classes.ts';
+  import type { InteractPrompt } from '$lib/game/interactions.ts';
 
   let {
     client,
     cameraYaw = 0,
     biome,
     subBiome,
+    interactPrompt = null,
     onChat,
   }: {
     client: GameClient;
     cameraYaw?: number;
     biome?: string;
     subBiome?: string;
+    /** Action available on the player's current tile (stairs / exit), or null. */
+    interactPrompt?: InteractPrompt | null;
     onChat: (text: string) => void;
   } = $props();
 
@@ -83,6 +87,13 @@
       <div><b>Look</b> drag · <b>Zoom</b> wheel</div>
     </div>
   </div>
+
+  {#if interactPrompt}
+    <div class="interact" class:blocked={interactPrompt.blocked} aria-live="polite">
+      <kbd>{interactPrompt.key}</kbd>
+      <span>{interactPrompt.label}</span>
+    </div>
+  {/if}
 
   <div class="bottom-left panel log">
     {#each client.chat.slice(-8) as line (line.at + line.text)}
@@ -197,6 +208,53 @@
     width: 320px;
     max-width: calc(100vw - 24px);
     pointer-events: auto;
+  }
+  /* Interaction indicator: a centred action pill that appears when the player
+     stands on an interactable tile (stairs / exit), telling them the key. */
+  .interact {
+    position: absolute;
+    bottom: 88px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 14px;
+    background: rgba(10, 12, 16, 0.82);
+    border: 1px solid rgba(255, 207, 90, 0.5);
+    border-radius: 999px;
+    color: #ffe6a8;
+    font-size: 14px;
+    box-shadow: 0 0 22px rgba(255, 190, 85, 0.18);
+    animation: prompt-pulse 1.6s ease-in-out infinite;
+  }
+  .interact.blocked {
+    border-color: rgba(255, 255, 255, 0.16);
+    color: #9aa0aa;
+    box-shadow: none;
+    animation: none;
+  }
+  .interact kbd {
+    background: rgba(255, 207, 90, 0.16);
+    border: 1px solid rgba(255, 207, 90, 0.5);
+    border-radius: 6px;
+    padding: 1px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #ffcf5a;
+  }
+  .interact.blocked kbd {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: #9aa0aa;
+  }
+  @keyframes prompt-pulse {
+    0%, 100% {
+      box-shadow: 0 0 18px rgba(255, 190, 85, 0.14);
+    }
+    50% {
+      box-shadow: 0 0 26px rgba(255, 190, 85, 0.3);
+    }
   }
   .depth b {
     color: #ffcf5a;

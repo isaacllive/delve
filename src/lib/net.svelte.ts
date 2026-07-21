@@ -125,6 +125,14 @@ export class GameClient {
   usePotion(): void {
     this.send({ t: 'use' });
   }
+  /** Leave the out-of-dungeon hub and drop into floor 0. */
+  descend(): void {
+    this.send({ t: 'descend' });
+  }
+  /** Buy an item from a hub shop (menu-driven, no walking to the stall). */
+  buy(item: 'potion'): void {
+    this.send({ t: 'buy', item });
+  }
   sendChat(text: string): void {
     const t = text.trim();
     if (t) this.send({ t: 'chat', text: t });
