@@ -300,6 +300,33 @@ function goTo(run: Run, player: Player, level: number, at: { col: number; row: n
   ensureMonsters(run, level);
 }
 
+/** Move a hub-bound (camp) player onto dungeon floor 0. Shared by the spatial
+ *  portal interact and the hub screen's explicit 'descend' intent, so both
+ *  paths stay identical and server-authoritative. No-op unless in the camp. */
+function descendFromCamp(run: Run, player: Player): void {
+  const st = player.state;
+  if (!st.alive || st.level !== CAMP_DEPTH) return;
+  const f0 = getLevel(run.dungeon, 0);
+  goTo(run, player, 0, f0.entry);
+  broadcast(run, { t: 'log', text: `${st.name} descends into the dungeon.` });
+  broadcastState(run);
+}
+
+/** Buy one healing potion from the camp Provisioner. Shared by the spatial shop
+ *  interact and the hub screen's 'buy' intent. No-op unless in the camp. */
+function buyPotion(run: Run, player: Player): void {
+  const st = player.state;
+  if (!st.alive || st.level !== CAMP_DEPTH) return;
+  if (st.gold >= POTION_COST) {
+    st.gold -= POTION_COST;
+    st.potions += 1;
+    send(player.ws, { t: 'log', text: `Provisioner: "A potion, ${POTION_COST}g. Stay alive down there."` });
+    broadcastState(run);
+  } else {
+    send(player.ws, { t: 'log', text: `Provisioner: "A potion runs ${POTION_COST}g — you're short."` });
+  }
+}
+
 function handleInteract(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive) return;
@@ -308,27 +335,14 @@ function handleInteract(run: Run, player: Player): void {
   // ── Base camp: descent portal + shops. ──────────────────────────────────
   if (level.camp) {
     if (level.portal && cheb(st, level.portal) <= 1) {
-      const f0 = getLevel(run.dungeon, 0);
-      goTo(run, player, 0, f0.entry);
-      broadcast(run, { t: 'log', text: `${st.name} descends into the dungeon.` });
-      broadcastState(run);
+      descendFromCamp(run, player);
       return;
     }
     const shop = level.shops?.find((s) => cheb(st, s) <= 1);
     if (shop) {
       // The Provisioner sells healing potions; the Smith isn't stocked yet.
-      if (shop.name === 'Provisioner') {
-        if (st.gold >= POTION_COST) {
-          st.gold -= POTION_COST;
-          st.potions += 1;
-          send(player.ws, { t: 'log', text: `Provisioner: "A potion, ${POTION_COST}g. Stay alive down there."` });
-          broadcastState(run);
-        } else {
-          send(player.ws, { t: 'log', text: `Provisioner: "A potion runs ${POTION_COST}g — you're short."` });
-        }
-      } else {
-        send(player.ws, { t: 'log', text: `${shop.name}: "Not stocked yet, delver — soon."` });
-      }
+      if (shop.name === 'Provisioner') buyPotion(run, player);
+      else send(player.ws, { t: 'log', text: `${shop.name}: "Not stocked yet, delver — soon."` });
       return;
     }
     return;
@@ -524,6 +538,14 @@ function createWss(): WebSocketServer {
           break;
         case 'use':
           handleUsePotion(run, player);
+          break;
+        case 'descend':
+          descendFromCamp(run, player);
+          break;
+        case 'buy':
+          // Only the potion shop is stocked; guard the item so an unknown value
+          // can't be honoured.
+          if (msg.item === 'potion') buyPotion(run, player);
           break;
         case 'chat': {
           const text = String(msg.text || '').slice(0, MAX_CHAT_LEN).trim();

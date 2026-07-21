@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { GameClient } from '$lib/net.svelte.ts';
-  import { generateDungeon, getLevel, type Dungeon } from '$lib/game/dungeon.ts';
+  import { generateDungeon, getLevel, CAMP_DEPTH, type Dungeon } from '$lib/game/dungeon.ts';
+  import { interactablePrompt } from '$lib/game/interactions.ts';
   import DungeonView3D from '$lib/components/DungeonView3D.svelte';
   import Hud from '$lib/components/Hud.svelte';
+  import HubScreen from '$lib/components/HubScreen.svelte';
 
   let { data } = $props();
 
@@ -20,8 +22,18 @@
   });
 
   const me = $derived(client.me);
+  // At CAMP_DEPTH the player is on the surface: show the 2D hub, not the 3D
+  // dungeon (so no geometry or enemies render here — the camp is a safe zone).
+  const atHub = $derived(!!me && me.level <= CAMP_DEPTH);
   const currentLevel = $derived(
     dungeon && me ? getLevel(dungeon, Math.min(me.level, dungeon.levelCount - 1)) : null,
+  );
+  // The action available on the tile the player stands on (stairs / exit),
+  // driving the HUD interaction indicator. Hub actions are buttons, not tiles.
+  const interactPrompt = $derived(
+    !atHub && currentLevel && me && dungeon
+      ? interactablePrompt(currentLevel, me.col, me.row, client.bossDefeated, dungeon.levelCount)
+      : null,
   );
 
   function typingInField(): boolean {
@@ -53,6 +65,9 @@
 
   function onKey(e: KeyboardEvent) {
     if (typingInField()) return;
+    // In the hub, all actions are UI buttons — dungeon movement/interact keys
+    // are inert so stray keystrokes can't shuffle the camp token.
+    if (atHub) return;
     const key = e.key.toLowerCase();
     if (key === ' ' || key === 'e') {
       e.preventDefault();
@@ -86,7 +101,21 @@
 <svelte:head><title>Delve · {data.code}</title></svelte:head>
 
 <div class="stage">
-  {#if currentLevel && dungeon}
+  {#if client.won}
+    <div class="overlay victory">
+      <h1>VICTORY</h1>
+      <p><b>{client.won}</b> conquered the depths and escaped.</p>
+      <a href="/">← back to lobby</a>
+    </div>
+  {:else if client.dead}
+    <div class="overlay death">
+      <h1>YOU DIED</h1>
+      <p>Your delver has fallen in the dark. Permadeath is final.</p>
+      <a href="/">← forge a new character</a>
+    </div>
+  {:else if atHub}
+    <HubScreen {client} onChat={(t) => client.sendChat(t)} />
+  {:else if currentLevel && dungeon}
     <DungeonView3D
       level={currentLevel}
       players={client.players}
@@ -97,20 +126,14 @@
       bossDefeated={client.bossDefeated}
       onYaw={(y) => (cameraYaw = y)}
     />
-    <Hud {client} {cameraYaw} biome={currentLevel?.biomeName} subBiome={currentLevel?.subBiomeName} onChat={(t) => client.sendChat(t)} />
-    {#if client.won}
-      <div class="overlay victory">
-        <h1>VICTORY</h1>
-        <p><b>{client.won}</b> conquered the depths and escaped.</p>
-        <a href="/">← back to lobby</a>
-      </div>
-    {:else if client.dead}
-      <div class="overlay death">
-        <h1>YOU DIED</h1>
-        <p>Your delver has fallen in the dark. Permadeath is final.</p>
-        <a href="/">← forge a new character</a>
-      </div>
-    {/if}
+    <Hud
+      {client}
+      {cameraYaw}
+      {interactPrompt}
+      biome={currentLevel?.biomeName}
+      subBiome={currentLevel?.subBiomeName}
+      onChat={(t) => client.sendChat(t)}
+    />
   {:else}
     <div class="loading">
       <div class="spinner"></div>
