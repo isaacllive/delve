@@ -6,12 +6,24 @@
   import DungeonView3D from '$lib/components/DungeonView3D.svelte';
   import Hud from '$lib/components/Hud.svelte';
   import HubScreen from '$lib/components/HubScreen.svelte';
+  import DebugMenu, { type DebugFlags } from '$lib/components/DebugMenu.svelte';
 
   let { data } = $props();
 
   const client = new GameClient();
   let dungeon = $state<Dungeon | null>(null);
   let cameraYaw = $state(0);
+
+  // In-game debug menu (toggle with the backtick key). `flags` is a shared
+  // reactive object handed straight to DungeonView3D — the menu mutates it and
+  // the scene re-renders. Defaults preserve the current dev view (fog off).
+  let debugOpen = $state(false);
+  let debugFlags = $state<DebugFlags>({
+    showAllTerrain: true,
+    hideCeiling: false,
+    useFigures: true,
+    ambient: 0.4,
+  });
 
   // Regenerate geometry client-side once the server confirms the seed.
   $effect(() => {
@@ -65,6 +77,12 @@
 
   function onKey(e: KeyboardEvent) {
     if (typingInField()) return;
+    // Backtick toggles the debug menu anywhere (hub or dungeon).
+    if (e.key === '`') {
+      e.preventDefault();
+      debugOpen = !debugOpen;
+      return;
+    }
     // In the hub, all actions are UI buttons — dungeon movement/interact keys
     // are inert so stray keystrokes can't shuffle the camp token.
     if (atHub) return;
@@ -125,6 +143,10 @@
       tick={client.tick}
       bossDefeated={client.bossDefeated}
       onYaw={(y) => (cameraYaw = y)}
+      debugShowAllTerrain={debugFlags.showAllTerrain}
+      debugHideCeiling={debugFlags.hideCeiling}
+      debugAmbient={debugFlags.ambient}
+      useFigures={debugFlags.useFigures}
     />
     <Hud
       {client}
@@ -140,6 +162,16 @@
       <p>{client.error ?? (client.connected ? 'Generating the dungeon…' : 'Connecting…')}</p>
       <a href="/">← back</a>
     </div>
+  {/if}
+
+  {#if debugOpen}
+    <DebugMenu
+      {client}
+      bind:flags={debugFlags}
+      level={currentLevel}
+      seed={client.seed}
+      onClose={() => (debugOpen = false)}
+    />
   {/if}
 </div>
 
