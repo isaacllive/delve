@@ -45,23 +45,28 @@ export class BaseTerrainGenerator {
     return Math.round(o.surfaceLevel + n * o.amplitude);
   }
 
+  /** Base terrain block at a world position, given its column surface height.
+   *  The single source of truth for the terrain layering (used by both `fill`
+   *  and the pipeline's chunk-independent sampler). */
+  blockAt(wy: number, surface: number): number {
+    const floor = this.config.minCaveY + this.opts.bedrockDepth;
+    if (wy < floor) return Block.BEDROCK;
+    if (wy > surface) return Block.AIR;
+    if (wy === surface) return Block.GRASS;
+    if (wy > surface - 4) return Block.DIRT;
+    if (wy < this.config.minCaveY + 40) return Block.DEEP_STONE;
+    return Block.STONE;
+  }
+
   /** Fill a chunk with base terrain (bedrock floor / stone / dirt / grass / air). */
   fill(chunk: VoxelChunk): void {
-    const floor = this.config.minCaveY + this.opts.bedrockDepth;
     for (let lz = 0; lz < chunk.sizeZ; lz++) {
       for (let lx = 0; lx < chunk.sizeX; lx++) {
         const wx = chunk.origin.x + lx;
         const wz = chunk.origin.z + lz;
         const surface = this.surfaceHeight(wx, wz);
         for (let ly = 0; ly < chunk.sizeY; ly++) {
-          const wy = chunk.origin.y + ly;
-          let block: number;
-          if (wy < floor) block = Block.BEDROCK;
-          else if (wy > surface) block = Block.AIR;
-          else if (wy === surface) block = Block.GRASS;
-          else if (wy > surface - 4) block = Block.DIRT;
-          else if (wy < this.config.minCaveY + 40) block = Block.DEEP_STONE;
-          else block = Block.STONE;
+          const block = this.blockAt(chunk.origin.y + ly, surface);
           if (block !== Block.AIR) chunk.set(lx, ly, lz, block);
         }
       }

@@ -77,6 +77,20 @@ Living checklist of changes. Newest intent at top; tick items as they land.
       Gold/potions are carried and lost on death (`loot.ts`). Still to do:
       cross-run banking/persistence, gear/inventory, the Smith's stock.
 
+- [x] **Voxel cave generator** (`src/lib/voxel/`) — a standalone, chunk-based,
+      world-space-deterministic voxel cave engine (data only, no rendering
+      coupling): seeded hashing + coords + typed-array chunks + Perlin/fBm/warp
+      noise; validated config; base terrain; density "spaghetti" caves;
+      region-origin winding tunnels with bounded branching + capsule carving;
+      noise-distorted ellipsoid caverns; bounded post-processing; pipeline;
+      debug slices; example. **23 tests** cover determinism, chunk-order
+      independence, border seamlessness, negative coords, protected blocks,
+      bounded branching. Groundwork for a future true-3D voxel Delve.
+  - [ ] Remaining (extension points wired): surface openings, full depth/biome
+        profiles, regional connectivity flood-fill, materials/ores/fluids,
+        coarse density interpolation, bounded async generation. See
+        `src/lib/voxel/README.md`.
+
 ## Deferred / backlog
 
 - Wire class **abilities** (Cleave, Volley, Arcane Bolt, …) into combat.
