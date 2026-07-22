@@ -121,8 +121,20 @@
 
   // Per-cell "full" transform for the current level (position + box height),
   // and whether the cell has ever been revealed (fog memory).
-  let fullMatrix: import('three').Matrix4[] = [];
+  // Ground/wall terrain is an InstancedMesh of stacked blocks. A WALL column is
+  // split into multiple blocks — a buried base plus one unit block per world-Y
+  // level up to the roof — so the column dissolves block-by-block as the
+  // camera→delver cutaway carves through it (rather than the whole wall popping
+  // out at once). Floors/ledges stay a single block. `cellBlock{Start,Count}`
+  // map each cell to its contiguous run of block instances; `blockCell/Y/H`
+  // describe each block. The reveal/fog fade is per cell (a cell's blocks share
+  // it); the occluder fade (`occFade`) is per block.
   let baseColor: import('three').Color[] = [];
+  let cellBlockStart: Int32Array = new Int32Array(0);
+  let cellBlockCount: Uint16Array = new Uint16Array(0);
+  let blockCell: Int32Array = new Int32Array(0);
+  let blockY: Float32Array = new Float32Array(0);
+  let blockH: Float32Array = new Float32Array(0);
   let revealed: boolean[] = [];
   // Persistent fog memory per floor: once seen, terrain is dimly remembered even
   // after you leave and return (Brogue-style). Keyed by depth; `revealed` aliases
@@ -256,6 +268,20 @@
   function groundExtents(kind: string, elevation: number): [number, number] {
     if (kind === 'wall') return [VOX_BASE, VOX_TOP]; // solid rock column
     return [VOX_BASE, elevation]; // floor mass up to the surface you stand on
+  }
+
+  /** Split a cell's GROUND mass into stacked [bottom, top] blocks. A wall
+   *  becomes a buried base block (below the walkable level, never seen) plus one
+   *  unit block per world-Y step up to the roof, so the visible column is made
+   *  of individually-fadeable blocks. Floors/ledges stay a single block (they're
+   *  short and never carved through). */
+  function columnBlocks(kind: string, elevation: number): [number, number][] {
+    const [gb, gt] = groundExtents(kind, elevation);
+    if (kind !== 'wall') return [[gb, gt]];
+    const GROUND = 0; // walkable reference level; below it is buried rock
+    const blocks: [number, number][] = [[gb, GROUND]];
+    for (let y = GROUND; y < gt - 1e-6; y += 1) blocks.push([y, Math.min(y + 1, gt)]);
+    return blocks;
   }
 
   /** Small deterministic per-cell tone jitter so big rock faces aren't flat. */
@@ -421,12 +447,31 @@
     const ceilRects: UVRect[] = [ceil, ceil, ceil, ceil, ceil, ceil]; // roof rock all round
 
     const count = l.cols * l.rows;
-    // Two voxel layers: the GROUND rock mass (floor + solid walls) and the ROOF
-    // rock mass hanging from the ceiling. Per-instance alpha lets the tunnel
-    // between the camera and the delver fade open.
-    const alpha = new Float32Array(count).fill(1);
+
+    // First pass: split every cell's ground mass into stacked blocks and lay out
+    // their contiguous instance ranges (walls → many blocks, others → one).
+    cellBlockStart = new Int32Array(count);
+    cellBlockCount = new Uint16Array(count);
+    const perCell: [number, number][][] = new Array(count);
+    let total = 0;
+    for (let i = 0; i < count; i++) {
+      const cell = l.cells[i];
+      const blks = columnBlocks(cell.kind, cell.elevation);
+      perCell[i] = blks;
+      cellBlockStart[i] = total;
+      cellBlockCount[i] = blks.length;
+      total += blks.length;
+    }
+    blockCell = new Int32Array(total);
+    blockY = new Float32Array(total);
+    blockH = new Float32Array(total);
+
+    // Two voxel layers: the GROUND rock mass (floor + solid walls, now stacked
+    // blocks) and the ROOF rock mass hanging from the ceiling (one block/cell).
+    // Per-instance alpha lets the camera→delver tunnel fade open.
+    const alpha = new Float32Array(total).fill(1);
     alphaAttr = new THREE.InstancedBufferAttribute(alpha, 1);
-    terrain = new THREE.InstancedMesh(makeVoxelGeo(count, alphaAttr, terrainRects), alphaMat(terrainAtlas), count);
+    terrain = new THREE.InstancedMesh(makeVoxelGeo(total, alphaAttr, terrainRects), alphaMat(terrainAtlas), total);
     terrain.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     terrain.frustumCulled = false;
 
@@ -437,7 +482,6 @@
     ceiling.frustumCulled = false;
     ceilMatrix = new Array(count);
 
-    fullMatrix = new Array(count);
     baseColor = new Array(count);
     // Restore this floor's fog memory if we've visited before (dimensions are
     // deterministic per depth, so a cached array always matches); otherwise start
@@ -451,7 +495,7 @@
     ceilTarget = new Float32Array(count * 3);
     ceilShow = new Uint8Array(count);
     ceilFade = new Float32Array(count);
-    occFade = new Float32Array(count);
+    occFade = new Float32Array(total); // per BLOCK now
     occFadeCeil = new Float32Array(count);
     voxBright = new Float32Array(count);
     curCols = l.cols;
@@ -469,18 +513,23 @@
         const i = cellIndex(col, row, l.cols);
         const cell = l.cells[i];
         const roof = cell.ceiling ?? CEIL_FALLBACK;
-        // GROUND rock mass: solid from the base up to the floor surface (or the
-        // full column for a wall) — adjacent cells at different heights show
-        // their stepped side faces, giving the blocky voxel floor.
-        const [gb, gt] = groundExtents(cell.kind, cell.elevation);
-        const gh = Math.max(0.05, gt - gb);
-        pos.set(col, (gb + gt) / 2, row);
-        scl.set(1, gh, 1);
-        m.compose(pos, quat, scl);
-        fullMatrix[i] = m.clone();
         const c = new THREE.Color(palColor(l.palette, cell.kind));
         c.offsetHSL(0, 0, jitter(i));
         baseColor[i] = c;
+        // GROUND: emit each stacked block. Adjacent cells at different heights
+        // show their stepped side faces (blocky voxel floor); tall walls are now
+        // a column of unit blocks that fade one at a time.
+        const start = cellBlockStart[i];
+        for (let k = 0; k < perCell[i].length; k++) {
+          const [bb, bt] = perCell[i][k];
+          const b = start + k;
+          blockCell[b] = i;
+          blockY[b] = (bb + bt) / 2;
+          blockH[b] = Math.max(0.05, bt - bb);
+          // Start hidden (zero scale) — unrevealed.
+          terrain.setMatrixAt(b, ZERO_SCALE);
+          terrain.setColorAt(b, BLACK);
+        }
         // ROOF rock mass: solid from the ceiling up to the top of the volume,
         // so the roof is a hanging block, not a thin slab.
         const rh = Math.max(0.05, VOX_TOP - roof);
@@ -488,9 +537,6 @@
         scl.set(1, rh, 1);
         m.compose(pos, quat, scl);
         ceilMatrix[i] = m.clone();
-        // Start hidden (zero scale) — unrevealed.
-        terrain.setMatrixAt(i, ZERO_SCALE);
-        terrain.setColorAt(i, BLACK);
         ceiling.setMatrixAt(i, ZERO_SCALE);
         ceiling.setColorAt(i, BLACK);
       }
@@ -639,20 +685,34 @@
   }
 
   // ── fade helpers ──────────────────────────────────────────────────────────
-  // Write a cell's mesh instance from its current eased fade + target colour.
-  function applyTerr(i: number) {
+  // Write ONE ground block instance from its cell's eased reveal fade + colour
+  // and its own occluder fade. The reveal (colour × visibility) is per cell; the
+  // occluder cutout (per-instance alpha) is per block, so a wall column dissolves
+  // block-by-block.
+  function applyBlock(b: number) {
     if (!terrain || !THREE) return;
-    const f = terrFade[i];
+    const cell = blockCell[b];
+    const f = terrFade[cell];
     if (f <= 0.001) {
-      terrain.setMatrixAt(i, ZERO_SCALE);
-      if (alphaAttr) alphaAttr.setX(i, 0);
+      terrain.setMatrixAt(b, ZERO_SCALE);
+      if (alphaAttr) alphaAttr.setX(b, 0);
       return;
     }
-    terrain.setMatrixAt(i, fullMatrix[i]);
-    tmpCol.setRGB(terrTarget[i * 3] * f, terrTarget[i * 3 + 1] * f, terrTarget[i * 3 + 2] * f);
-    terrain.setColorAt(i, tmpCol);
-    // Occluding walls fade out via per-instance alpha (the "ring" cutout).
-    if (alphaAttr) alphaAttr.setX(i, 1 - OCC_MAX * occFade[i]);
+    const col = cell % curCols;
+    const row = (cell - col) / curCols;
+    _bpos.set(col, blockY[b], row);
+    _bscl.set(1, blockH[b], 1);
+    _bm.compose(_bpos, _bq, _bscl);
+    terrain.setMatrixAt(b, _bm);
+    tmpCol.setRGB(terrTarget[cell * 3] * f, terrTarget[cell * 3 + 1] * f, terrTarget[cell * 3 + 2] * f);
+    terrain.setColorAt(b, tmpCol);
+    if (alphaAttr) alphaAttr.setX(b, 1 - OCC_MAX * occFade[b]);
+  }
+  // Rewrite every block of a cell (used when the cell's reveal fade/colour ticks).
+  function applyTerr(cell: number) {
+    const s = cellBlockStart[cell];
+    const n = cellBlockCount[cell];
+    for (let k = 0; k < n; k++) applyBlock(s + k);
   }
   function applyCeil(i: number) {
     if (!ceiling || !THREE) return;
@@ -744,6 +804,12 @@
   let _camSph: import('three').Spherical;
   let _v3: import('three').Vector3;
   let _right: import('three').Vector3;
+  // Scratch for composing a ground BLOCK's matrix on the fly (avoids caching a
+  // Matrix4 per block — there can be hundreds of thousands).
+  let _bm: import('three').Matrix4;
+  let _bpos: import('three').Vector3;
+  let _bscl: import('three').Vector3;
+  let _bq: import('three').Quaternion;
 
   /** A glowing portal column + light at a cell (camp descent / dungeon exit). */
   function addPortal(at: { col: number; row: number }, color: number) {
@@ -1158,6 +1224,17 @@
     if (nd >= OCC_R_OUT) return 0;
     return (OCC_R_OUT - nd) / (OCC_R_OUT - OCC_R_IN);
   }
+  /** Index of the ground block in `cellIdx` whose vertical span contains world-Y
+   *  `y` (blocks run bottom→top). Clamps to the topmost block above the column. */
+  function blockAtHeight(cellIdx: number, y: number): number {
+    const s = cellBlockStart[cellIdx];
+    const n = cellBlockCount[cellIdx];
+    for (let k = 0; k < n; k++) {
+      const b = s + k;
+      if (y <= blockY[b] + blockH[b] / 2) return b;
+    }
+    return s + n - 1;
+  }
   function cutAwayOccluders(dt: number) {
     if (!terrain || !THREE || !camera) return;
     occTarget.clear();
@@ -1206,7 +1283,10 @@
         if (c === meCell.col && r === meCell.row) continue; // never the delver's own cell
         const idx = cellIndex(c, r, l.cols);
         const gt = groundExtents(l.cells[idx].kind, l.cells[idx].elevation)[1];
-        if (y < gt) bump(occTarget, idx, 1); // solid mass crosses the sightline here
+        // Fade only the individual BLOCK the ray pierces at this height, so a
+        // wall column is carved open block-by-block (a delver-height hole) rather
+        // than the whole column winking out.
+        if (y < gt) bump(occTarget, blockAtHeight(idx, y), 1);
       }
     }
 
@@ -1233,18 +1313,19 @@
         if (w > 0) bump(occTargetCeil, idx, w);
       }
     }
-    // Ease flagged cells toward faded, previously-flagged back toward solid.
+    // Ease flagged blocks toward faded, previously-flagged back toward solid.
+    // occActive / occTarget key individual ground BLOCK instances now.
     const step = Math.min(1, dt * OCC_SPEED);
     let tChanged = false;
-    for (const i of new Set([...occActive, ...occTarget.keys()])) {
-      const tgt = occTarget.get(i) ?? 0;
-      let o = occFade[i];
+    for (const b of new Set([...occActive, ...occTarget.keys()])) {
+      const tgt = occTarget.get(b) ?? 0;
+      let o = occFade[b];
       o = o < tgt ? Math.min(tgt, o + step) : Math.max(tgt, o - step);
-      occFade[i] = o;
-      applyTerr(i);
+      occFade[b] = o;
+      applyBlock(b);
       tChanged = true;
-      if (o <= 0.001 && tgt === 0) occActive.delete(i);
-      else occActive.add(i);
+      if (o <= 0.001 && tgt === 0) occActive.delete(b);
+      else occActive.add(b);
     }
     let cChanged = false;
     for (const i of new Set([...occActiveCeil, ...occTargetCeil.keys()])) {
@@ -1314,6 +1395,10 @@
       _camSph = new THREE.Spherical();
       _v3 = new THREE.Vector3();
       _right = new THREE.Vector3();
+      _bm = new THREE.Matrix4();
+      _bpos = new THREE.Vector3();
+      _bscl = new THREE.Vector3();
+      _bq = new THREE.Quaternion();
     }
 
     const you = ps.find((p) => p.id === youId);
