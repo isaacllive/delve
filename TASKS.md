@@ -29,6 +29,36 @@ plan) and `docs/brogue-features.md` (mechanic selection). Roadmap phases:
    victory lap (amulet → climb out).
 4. **(Stretch)** room-accretion generator + blueprint machines.
 
+### Wave 1 (parallel subagents) — LANDED
+Four worktree-isolated agents built pure modules against the Phase-0 contract;
+all merged to this branch (382 tests, 0 type errors). See
+`docs/parallelization.md`.
+- [x] **Terrain simulation** — `hazards.ts` (deterministic fire-spread + gas
+      diffusion CA) + `grass`/`flammable` in `terrain.ts`. 13 tests.
+- [x] **Room-accretion generator** — `roomgen.ts` (Brogue-style accrete + loops,
+      room/door metadata for future machines). 12 tests.
+- [x] **Monster catalog** — `monsters.ts` expanded: per-kind speeds
+      (`actionTicks`, now read by the scheduler), ability flags, hordes,
+      out-of-depth, mutations. 19 tests.
+- [x] **Gear + enchant** — `gear.ts` (weapons/armor catalog, instance model,
+      enchant economy, combat derivations) + `scroll of enchanting` +
+      `spawnGear`. 20 tests.
+
+### Wave 2 (serial integration) — TODO
+Wire the Wave-1 modules through the Phase-0 seams (intent registry + world
+systems). Each is an additive integration:
+- [ ] **Terrain**: register a `stepHazards` world system; place `grass` in gen;
+      damage/afflict actors standing in fire/gas; broadcast + render fire/gas
+      (renderer) and burnt grass→floor.
+- [ ] **Gear**: widen `LootState.kind` to include gear; call `spawnGear` in
+      `ensureMonsters`; equip intent + equipment on `PlayerState`; route
+      player/monster combat through `gear.equippedAccuracy/Defense/weaponDamageRoll`;
+      Scroll of Enchanting + gear identify effects; HUD equip UI; Smith sells gear.
+- [ ] **Monster abilities**: resolve the flags in `actMonster`/combat
+      (split/steal/corrode/ranged/summon/explode/poison); client ability tint.
+- [ ] **Room gen**: adopt `generateRoomLevel` as the generator for architectural
+      biomes in `dungeon.ts` (layer on lights/palette/ceilings).
+
 ### Refocus progress
 - [x] **Turn/energy scheduler** — pure `src/lib/game/energy.ts` (100/50/200-tick
       turns, per-actor speeds, `nextToAct`/`runUntilPlayer`) + tests. *(Not yet
