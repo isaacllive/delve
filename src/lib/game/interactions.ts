@@ -35,6 +35,11 @@ export function interactablePrompt(
   levelCount: number,
   hasAmulet = false,
 ): InteractPrompt | null {
+  // Commutation altar (a machine) — swap equipped weapon/armor enchant.
+  if (level.altar && level.altar.col === col && level.altar.row === row) {
+    return { key: INTERACT_KEY, label: 'Commute: swap weapon & armor enchant' };
+  }
+
   // The Amulet of Yendor (deepest floor, on the boss's dais). Guarded until the
   // Warden falls; nothing to do here once it's been claimed.
   if (level.exit && level.exit.col === col && level.exit.row === row) {

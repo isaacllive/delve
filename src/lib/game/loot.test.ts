@@ -30,6 +30,18 @@ describe('loot', () => {
     }
   });
 
+  it('meters a guaranteed Scroll of Enchanting onto every third floor', () => {
+    const d = generateDungeon('ench-seed');
+    // Depths where depth % 3 === 2 (2, 5, 8, …) always yield one enchant scroll.
+    for (const depth of [2, 5, 8]) {
+      const scrolls = spawnLoot(d.seed, getLevel(d, depth)).filter((l) => l.kindId === 'enchanting');
+      expect(scrolls.length).toBe(1);
+    }
+    // Off-cadence floors get no *guaranteed* enchant scroll from metering.
+    const off = spawnLoot(d.seed, getLevel(d, 3)).filter((l) => l.id.endsWith('-ench'));
+    expect(off.length).toBe(0);
+  });
+
   it('rewards more gold for the boss and tougher foes', () => {
     expect(monsterReward(16, true)).toBeGreaterThan(monsterReward(3, false));
     expect(monsterReward(6, false)).toBeGreaterThan(monsterReward(2, false));

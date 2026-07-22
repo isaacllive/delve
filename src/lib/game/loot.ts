@@ -63,6 +63,11 @@ export const POTION_COST = 15;
 /** Chance a given loot drop is a consumable item (vs a gold pile). */
 const ITEM_DROP_CHANCE = 0.35;
 
+/** Kinds that drop at random on the floor. Excludes the Scroll of Enchanting —
+ *  its supply is METERED separately (see spawnLoot) to keep the enchant economy
+ *  finite. Food + all other potions/scrolls drop normally. */
+const DROPPABLE_KINDS = ITEM_KINDS.filter((k) => k.id !== 'enchanting');
+
 /** Per-attempt chance a floor yields a piece of gear (see `spawnGear`).
  *  Deliberately low so gear stays rarer than consumables — weapons/armor are
  *  scarce in Brogue and power comes from enchanting the few you find. */
@@ -98,7 +103,7 @@ export function spawnLoot(seed: string, level: DungeonLevel): Loot[] {
     const col = idx % level.cols;
     const row = Math.floor(idx / level.cols);
     if (rng.chance(ITEM_DROP_CHANCE)) {
-      const kind = rng.pick(ITEM_KINDS);
+      const kind = rng.pick(DROPPABLE_KINDS);
       out.push({
         id: `${level.depth}-l${n}`,
         kind: 'item',
@@ -112,6 +117,22 @@ export function spawnLoot(seed: string, level: DungeonLevel): Loot[] {
       const base = 5 + level.depth * 2;
       out.push({ id: `${level.depth}-l${n}`, kind: 'gold', col, row, amount: base + rng.int(0, base) });
     }
+  }
+
+  // Metered enchant economy: guarantee a Scroll of Enchanting on a fixed cadence
+  // (~every third floor) so its lifetime supply is finite and predictable — the
+  // Brogue pillar that you invest a fixed number of enchants, never grind for more.
+  if (level.depth % 3 === 2) {
+    const idx = open[rng.int(0, open.length - 1)];
+    out.push({
+      id: `${level.depth}-ench`,
+      kind: 'item',
+      col: idx % level.cols,
+      row: Math.floor(idx / level.cols),
+      amount: 0,
+      kindId: 'enchanting',
+      category: 'scroll',
+    });
   }
   return out;
 }

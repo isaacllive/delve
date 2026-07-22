@@ -1143,6 +1143,21 @@
       addPortal(level.exit, 0x8affff);
     }
 
+    // Commutation altar — a low glowing pedestal you can activate.
+    if (level.altar) {
+      const altar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.34, 0.42, 0.5, 6),
+        new THREE.MeshBasicMaterial({ color: 0x9a7fff, depthTest: false }),
+      );
+      altar.position.set(level.altar.col, 0.25, level.altar.row);
+      altar.renderOrder = 13;
+      avatarGroup.add(altar);
+      const glow = new THREE.PointLight(0x9a7fff, 1.6, 8, 1.5);
+      glow.position.set(level.altar.col, 0.9, level.altar.row);
+      scene.add(glow);
+      torchLights.push(glow);
+    }
+
     for (const p of viewers) {
       const isYou = p.id === youId;
       // Seed the eased visual position: resume the prior glide across the figure

@@ -49,6 +49,24 @@ describe('generateDungeon (lazy, biome-aware)', () => {
     expect(getLevel(d, 5)).toBe(getLevel(d, 5));
   });
 
+  it('places a commutation altar on eligible mid-run floors only', () => {
+    const d = generateDungeon('altar-seed');
+    // Ineligible: shallow floors (< 3) and non-multiples of 3 never carry one.
+    expect(getLevel(d, 0).altar).toBeUndefined();
+    expect(getLevel(d, 1).altar).toBeUndefined();
+    expect(getLevel(d, 4).altar).toBeUndefined();
+    // Eligible floors (depth ≥ 3, depth % 3 === 0) carry an altar, on a walkable
+    // cell away from the entry. Check across a few so a rare placement miss on
+    // one floor doesn't flake the test.
+    const altars = [6, 9, 12, 15, 18].map((depth) => getLevel(d, depth).altar).filter(Boolean);
+    expect(altars.length).toBeGreaterThan(0);
+    for (const depth of [6, 9, 12, 15, 18]) {
+      const lvl = getLevel(d, depth);
+      if (!lvl.altar) continue;
+      expect(lvl.cells[lvl.altar.row * lvl.cols + lvl.altar.col].kind).not.toBe('wall');
+    }
+  });
+
   it('carves a substantial open cavern on each floor', () => {
     const d = generateDungeon('halls', { levelCount: 4 });
     for (const lvl of levels(d)) {

@@ -41,6 +41,9 @@ export interface DungeonLevel extends Level {
   palette: BiomePalette;
   biomeName: string;
   subBiomeName: string;
+  /** Commutation altar location (some floors) — a machine that swaps the enchant
+   *  of the player's equipped weapon and armor. One use per altar. */
+  altar?: { col: number; row: number };
   /** Boss location (bottom floor only). */
   boss?: { col: number; row: number };
   /** Exit-portal location (bottom floor only; same cell as the boss). */
@@ -376,6 +379,20 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
     lights.push(makeLight(rng.pick(sb.lights), c, r));
   }
 
+  // Commutation altar (a machine): appears on some mid-run floors, set well away
+  // from the entry. Deterministic; one such altar per eligible floor.
+  let altar: { col: number; row: number } | undefined;
+  if (!isLast && depth >= 3 && depth % 3 === 0) {
+    for (let t = 0; t < 40 && !altar; t++) {
+      const idx = openList[rng.int(0, openList.length - 1)];
+      if (reserved.has(idx) || cells[idx].kind !== 'floor') continue;
+      const c = idx % cols;
+      const r = Math.floor(idx / cols);
+      if (Math.abs(c - entry.col) + Math.abs(r - entry.row) < 10) continue;
+      altar = { col: c, row: r };
+    }
+  }
+
   computeCeilings(cells, cols, rows, depth);
 
   return {
@@ -390,6 +407,7 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
     openCount: region.size,
     palette: sb.palette,
     biomeName: biome,
+    altar,
     subBiomeName: sb.name,
     boss,
     exit,

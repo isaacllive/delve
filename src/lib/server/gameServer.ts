@@ -147,6 +147,8 @@ interface Run {
   combatRng: Rng;
   /** Summon cooldown (turns remaining) per summoner monster id. Server-only. */
   summonCd: Map<string, number>;
+  /** Depths whose commutation altar has already been spent (one use each). */
+  usedAltars: Set<number>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -314,6 +316,7 @@ function joinRun(
       purchases: 0,
       combatRng: makeRng(`${s}#combat`),
       summonCd: new Map(),
+      usedAltars: new Set(),
     };
     runs.set(code, run);
   }
@@ -756,10 +759,43 @@ function claimAmulet(run: Run, player: Player): void {
   broadcastState(run);
 }
 
+/** Commutation altar: swap the enchant level of the delver's equipped weapon and
+ *  armor (Brogue's enchant-shuffling machine, adapted to your two equipped
+ *  pieces). One use per altar; needs both a weapon and armor equipped. */
+function commuteAltar(run: Run, player: Player): void {
+  const st = player.state;
+  if (run.usedAltars.has(st.level)) {
+    send(player.ws, { t: 'log', text: `The altar is dark and spent.` });
+    return;
+  }
+  const wi = st.gear.findIndex((g) => g.instId === st.equippedWeapon);
+  const ai = st.gear.findIndex((g) => g.instId === st.equippedArmor);
+  if (wi < 0 || ai < 0) {
+    send(player.ws, { t: 'log', text: `The altar hungers — equip both a weapon and armor to commute them.` });
+    return;
+  }
+  const we = st.gear[wi].enchantLevel;
+  const ae = st.gear[ai].enchantLevel;
+  st.gear[wi] = { ...st.gear[wi], enchantLevel: ae, enchantKnown: true };
+  st.gear[ai] = { ...st.gear[ai], enchantLevel: we, enchantKnown: true };
+  run.usedAltars.add(st.level);
+  send(player.ws, {
+    t: 'log',
+    text: `The altars flare — your ${gearDisplayName(st.gear[wi])} and ${gearDisplayName(st.gear[ai])} exchange power.`,
+  });
+  broadcastState(run);
+}
+
 function handleInteract(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive) return;
   const level = getLevel(run.dungeon, st.level);
+
+  // Commutation altar (a machine) — swap equipped weapon/armor enchant.
+  if (level.altar && st.col === level.altar.col && st.row === level.altar.row) {
+    commuteAltar(run, player);
+    return;
+  }
 
   // ── Base camp: descent portal + shops. ──────────────────────────────────
   if (level.camp) {
