@@ -5,6 +5,7 @@
   // in isolation. Toggles mirror the in-game debug menu's render flags.
   import { browser } from '$app/environment';
   import DungeonView3D from '$lib/components/DungeonView3D.svelte';
+  import Minimap from '$lib/components/Minimap.svelte';
   import { generateDungeon, getLevel } from '$lib/game/dungeon.ts';
   import { cellIndex } from '$lib/game/grid.ts';
   import type { PlayerState, MonsterState } from '$lib/game/protocol.ts';
@@ -73,6 +74,7 @@
           debugHideCeiling={hideCeiling}
         />
       {/key}
+      <Minimap {level} players={[you]} {monsters} youId={you.id} tick={0} />
     {/if}
   </div>
 </div>

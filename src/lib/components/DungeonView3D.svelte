@@ -24,6 +24,7 @@
   import { MODEL_BY_ID, pickMiniId, makeKit, type ModelKit } from '$lib/models3d/index.ts';
   import { disposeObject3D } from '$lib/threeDispose.ts';
   import { VoxelTerrain } from '$lib/components/voxelTerrain.ts';
+  import { buildTerrainAtlas, type UVRect } from '$lib/render/textures.ts';
 
   let {
     level,
@@ -80,6 +81,11 @@
   // can still see down onto your character (the "visual hole", extended up).
   let ceiling: import('three').InstancedMesh | null = null;
   let ceilMatrix: import('three').Matrix4[] = [];
+  // Neutral procedural rock atlas (floor | wall | ceiling), tinted per-cell by
+  // the biome palette via instanceColor. Built once on first level, shared by
+  // both terrain + ceiling materials, disposed on teardown.
+  let terrainAtlas: import('three').Texture | null = null;
+  let atlasRects: { floor: UVRect; wall: UVRect; ceiling: UVRect } | null = null;
   // Alternate face-culled voxel-mesh floor/roof (built lazily when
   // useVoxelTerrain is on). Fed the same per-cell brightness/reveal the
   // instanced path computes, via its light/alpha shader texture.
@@ -151,6 +157,42 @@
   const ALIGN_EASE = 0.22; // snappier swing so turning clearly pivots the camera
   let desiredAz = 0; // = -facing
   let realignAt = -1e9;
+
+  // Avatar turn-in-place: rather than snapping a figure to its new heading, we
+  // ease its yaw toward the true facing so a turn sweeps through the intervening
+  // angles — e.g. facing away → NE → East, or a side turn pivoting to face the
+  // camera. `faceVis` holds each delver's current (eased) heading, keyed by id
+  // and surviving the per-move figure rebuild; `turners` are the live figure +
+  // arrow objects the animate loop nudges each frame. Framerate-independent
+  // exponential ease at TURN_EASE_PER_SEC (higher = snappier).
+  const TURN_EASE_PER_SEC = 14;
+  const faceVis = new Map<string, number>();
+  type Turner = {
+    id: string;
+    fig: import('three').Object3D | null;
+    arrow: import('three').Object3D;
+    col: number;
+    row: number;
+    elevation: number;
+    target: number; // true heading (radians) to ease toward
+  };
+  let turners: Turner[] = [];
+  let _turnUp: import('three').Vector3;
+  let _turnDir: import('three').Vector3;
+
+  // Point a figure + its ground arrow at heading `vis` (radians). Figures model
+  // forward as +z and heading 0 = North (−z), so yaw = π − vis; the arrow points
+  // along dir = (sin, 0, −cos) and sits half a cell ahead of the delver.
+  function orientAvatar(t: Turner, vis: number) {
+    if (!_turnUp) {
+      _turnUp = new THREE.Vector3(0, 1, 0);
+      _turnDir = new THREE.Vector3();
+    }
+    if (t.fig) t.fig.rotation.y = Math.PI - vis;
+    const dir = _turnDir.set(Math.sin(vis), 0, -Math.cos(vis));
+    t.arrow.quaternion.setFromUnitVectors(_turnUp, dir);
+    t.arrow.position.set(t.col + dir.x * 0.5, t.elevation + 0.5, t.row + dir.z * 0.5);
+  }
   let meCell = { col: 0, row: 0, elev: 0 };
   let builtLevelKey = '';
 
@@ -212,7 +254,11 @@
    *  dark) baked in, so instanced blocks read as lit voxels — combined with the
    *  per-instance colour, this is the Minecraft-cave look. Includes the
    *  `instanceAlpha` attribute for the occlusion fade. */
-  function makeVoxelGeo(count: number, attr: import('three').InstancedBufferAttribute) {
+  function makeVoxelGeo(
+    count: number,
+    attr: import('three').InstancedBufferAttribute,
+    faceRects?: readonly UVRect[],
+  ) {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     // BoxGeometry face order: +X, -X, +Y(top), -Y(bottom), +Z, -Z (4 verts each).
     const shade = [0.74, 0.74, 1.0, 0.6, 0.82, 0.68];
@@ -228,6 +274,21 @@
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('instanceAlpha', attr);
+    // Remap each face's 0..1 UVs into its atlas sub-rect so the tile texture
+    // samples the right tile per face (top→floor, sides→wall, etc.). Each face
+    // shows exactly one tile; scaled instances stretch that tile (accepted —
+    // floor tops are unit cells and tile perfectly; tall walls stretch).
+    if (faceRects) {
+      const uv = geo.attributes.uv as import('three').BufferAttribute;
+      for (let f = 0; f < 6; f++) {
+        const [u0, v0, u1, v1] = faceRects[f];
+        for (let v = 0; v < 4; v++) {
+          const idx = f * 4 + v;
+          uv.setXY(idx, u0 + uv.getX(idx) * (u1 - u0), v0 + uv.getY(idx) * (v1 - v0));
+        }
+      }
+      uv.needsUpdate = true;
+    }
     return geo;
   }
 
@@ -280,10 +341,11 @@
 
   /** A MeshBasicMaterial with per-instance `instanceAlpha` transparency, so
    *  individual cells can fade out (walls/roof between camera and character). */
-  function alphaMat(): import('three').MeshBasicMaterial {
+  function alphaMat(map?: import('three').Texture | null): import('three').MeshBasicMaterial {
     // vertexColors → the baked per-face shading; instanceColor (per cell) and
-    // instanceAlpha (occlusion fade) multiply on top in the shader.
-    const m = new THREE.MeshBasicMaterial({ transparent: true, vertexColors: true });
+    // instanceAlpha (occlusion fade) multiply on top in the shader. An optional
+    // `map` adds the neutral rock tile detail (multiplied on top of all three).
+    const m = new THREE.MeshBasicMaterial({ transparent: true, vertexColors: true, map: map ?? null });
     m.onBeforeCompile = (shader) => {
       shader.vertexShader =
         'attribute float instanceAlpha;\nvarying float vAlpha;\n' +
@@ -312,19 +374,40 @@
         (mesh.material as import('three').Material).dispose();
       }
     }
+    // Build the neutral rock tile atlas once, then reuse it for every level.
+    if (!terrainAtlas) {
+      const atlas = buildTerrainAtlas();
+      const tex = new THREE.CanvasTexture(atlas.canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      // The atlas has no gutter, so clamp (not repeat) and skip mipmaps to keep
+      // faces from bleeding into neighbouring tiles at distance.
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.generateMipmaps = false;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      terrainAtlas = tex;
+      atlasRects = atlas.rects;
+    }
+    // Per-face atlas mapping. Face order: +X, -X, +Y(top), -Y(bottom), +Z, -Z.
+    const { floor, wall, ceiling: ceil } = atlasRects!;
+    const terrainRects: UVRect[] = [wall, wall, floor, wall, wall, wall]; // floor on top
+    const ceilRects: UVRect[] = [ceil, ceil, ceil, ceil, ceil, ceil]; // roof rock all round
+
     const count = l.cols * l.rows;
     // Two voxel layers: the GROUND rock mass (floor + solid walls) and the ROOF
     // rock mass hanging from the ceiling. Per-instance alpha lets the tunnel
     // between the camera and the delver fade open.
     const alpha = new Float32Array(count).fill(1);
     alphaAttr = new THREE.InstancedBufferAttribute(alpha, 1);
-    terrain = new THREE.InstancedMesh(makeVoxelGeo(count, alphaAttr), alphaMat(), count);
+    terrain = new THREE.InstancedMesh(makeVoxelGeo(count, alphaAttr, terrainRects), alphaMat(terrainAtlas), count);
     terrain.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     terrain.frustumCulled = false;
 
     const calpha = new Float32Array(count).fill(1);
     ceilAlphaAttr = new THREE.InstancedBufferAttribute(calpha, 1);
-    ceiling = new THREE.InstancedMesh(makeVoxelGeo(count, ceilAlphaAttr), alphaMat(), count);
+    ceiling = new THREE.InstancedMesh(makeVoxelGeo(count, ceilAlphaAttr, ceilRects), alphaMat(terrainAtlas), count);
     ceiling.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     ceiling.frustumCulled = false;
     ceilMatrix = new Array(count);
@@ -630,6 +713,7 @@
   let _camOff: import('three').Vector3;
   let _camSph: import('three').Spherical;
   let _v3: import('three').Vector3;
+  let _right: import('three').Vector3;
 
   /** A glowing portal column + light at a cell (camp descent / dungeon exit). */
   function addPortal(at: { col: number; row: number }, color: number) {
@@ -694,6 +778,10 @@
     // Rebuild the small avatar set + torch lights each update (cheap: a handful).
     for (const l of torchLights) scene.remove(l);
     torchLights = [];
+    // Drop the previous frame's figure/arrow refs; we re-register the live ones
+    // below so the animate loop keeps easing each delver's heading. faceVis
+    // persists (keyed by id) so a rebuilt figure resumes mid-turn, not snapped.
+    turners = [];
     // Free throwaway primitives (rings, arrows, loot, fallback shapes) but keep
     // the cached figure geometry/materials that clones share (userData.shared).
     while (avatarGroup.children.length) {
@@ -778,7 +866,6 @@
       const fig = classMini ? figureFor(classMini, p.color) : null;
       if (fig) {
         fig.position.set(p.col, p.elevation, p.row);
-        fig.rotation.y = Math.PI - p.facing;
         if (!isYou) fig.scale.multiplyScalar(0.98); // subtle: others read slightly smaller
         avatarGroup.add(fig);
       } else {
@@ -796,17 +883,32 @@
         avatarGroup.add(mesh);
       }
 
-      // Facing arrow: a flat cone pointing the way the delver is heading.
-      // Heading 0 = North (−z), clockwise, so dir = (sin, 0, −cos).
-      const dir = new THREE.Vector3(Math.sin(p.facing), 0, -Math.cos(p.facing));
+      // Facing arrow: a flat cone pointing the way the delver is heading. Its
+      // orientation (and the figure's yaw) are applied by orientAvatar below,
+      // from the eased heading rather than the raw target, so the turn animates.
       const arrow = new THREE.Mesh(
         new THREE.ConeGeometry(0.16, 0.34, 12),
         new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95 }),
       );
-      arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      arrow.position.set(p.col + dir.x * 0.5, p.elevation + 0.5, p.row + dir.z * 0.5);
       arrow.renderOrder = 21;
       avatarGroup.add(arrow);
+
+      // Register the live figure + arrow for per-frame turn easing. First sight
+      // of a delver snaps to their heading (no spin-up from an arbitrary 0);
+      // afterwards the stored eased angle carries across the rebuild.
+      const vis = faceVis.get(p.id) ?? p.facing;
+      faceVis.set(p.id, vis);
+      const turner: Turner = {
+        id: p.id,
+        fig,
+        arrow,
+        col: p.col,
+        row: p.row,
+        elevation: p.elevation,
+        target: p.facing,
+      };
+      orientAvatar(turner, vis);
+      turners.push(turner);
 
       // A glowing halo disc on the ground beneath the character — also drawn
       // over the terrain so you can pinpoint the delver even amid tall rock.
@@ -847,6 +949,13 @@
       light.position.set(p.col, p.elevation + 0.9, p.row);
       scene.add(light);
       torchLights.push(light);
+    }
+
+    // Forget the eased heading of anyone no longer present so a rejoining id
+    // starts fresh (snapped) rather than resuming a stale angle.
+    if (faceVis.size > turners.length) {
+      const present = new Set(turners.map((t) => t.id));
+      for (const id of faceVis.keys()) if (!present.has(id)) faceVis.delete(id);
     }
   }
 
@@ -890,6 +999,21 @@
       camera.position.copy(controls.target).add(_camOff);
     }
 
+    // Ease each delver's body + arrow toward their true heading. The shortest
+    // angular path means a turn sweeps through the intervening angles — facing
+    // away then stepping sideways pivots through the diagonal to horizontal, and
+    // a turn toward the camera rotates rather than flipping instantly.
+    if (turners.length) {
+      const k = 1 - Math.exp(-dt * TURN_EASE_PER_SEC);
+      for (const t of turners) {
+        let vis = faceVis.get(t.id) ?? t.target;
+        const d = Math.atan2(Math.sin(t.target - vis), Math.cos(t.target - vis));
+        vis = Math.abs(d) < 1e-3 ? t.target : vis + d * k;
+        faceVis.set(t.id, vis);
+        orientAvatar(t, vis);
+      }
+    }
+
     controls.update();
     cutAwayOccluders(dt);
     // Report camera azimuth changes so the HUD compass can face the view.
@@ -925,39 +1049,72 @@
     const l = level;
     camera.updateMatrixWorld();
     const camPos = camera.position;
-    // The character's screen position is the centre of the clear circle.
-    _v3.set(meCell.col, meCell.elev + 0.7, meCell.row);
-    const charDist = _v3.distanceTo(camPos);
-    _v3.project(camera);
-    const ccx = _v3.x;
-    const ccy = _v3.y;
     const bump = (m: Map<number, number>, idx: number, w: number) => {
       if (w > (m.get(idx) ?? 0)) m.set(idx, w);
     };
-    // Scan cells around the player; fade only what sits BETWEEN the camera and
-    // the character (nearer the camera than the delver) within the on-screen
-    // circle. Terrain in front of / beyond the character stays solid, so the
-    // cave ahead is never carved away.
+
+    // ── Ground/wall occluders: only cut a column when it ACTUALLY blocks the
+    // delver. We march a small bundle of rays from the camera to points across
+    // the character's silhouette (feet → head, plus a little lateral spread so a
+    // column edge can't clip them) and flag any cell whose solid GROUND mass
+    // rises across the ray at that point. A cell not on the sightline is never
+    // touched, so nothing fades while the delver stands in the clear; a real
+    // occluder fades as a whole column, not a mid-height slice.
+    _right.setFromMatrixColumn(camera.matrixWorld, 0); // camera's world X (right)
+    _right.y = 0;
+    if (_right.lengthSq() > 1e-6) _right.normalize();
+    const baseX = meCell.col, baseZ = meCell.row;
+    const spread = 0.32;
+    // (dx, dy, dz) offsets from the character origin for each silhouette sample.
+    const targets: [number, number, number][] = [
+      [0, meCell.elev + 0.12, 0],
+      [0, meCell.elev + 0.6, 0],
+      [0, meCell.elev + 1.05, 0],
+      [_right.x * spread, meCell.elev + 0.6, _right.z * spread],
+      [-_right.x * spread, meCell.elev + 0.6, -_right.z * spread],
+    ];
+    for (const [ox, ty, oz] of targets) {
+      const tx = baseX + ox, tz = baseZ + oz;
+      const dx = tx - camPos.x, dy = ty - camPos.y, dz = tz - camPos.z;
+      const dist = Math.hypot(dx, dy, dz);
+      // ~3 samples per cell so even a 1-cell wall can't slip between steps.
+      const steps = Math.max(4, Math.ceil(dist / 0.33));
+      // Skip s=0 (at the camera) and the final step (at the delver).
+      for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        const x = camPos.x + dx * t;
+        const y = camPos.y + dy * t;
+        const z = camPos.z + dz * t;
+        const c = Math.round(x), r = Math.round(z);
+        if (c < 0 || r < 0 || c >= l.cols || r >= l.rows) continue;
+        if (c === meCell.col && r === meCell.row) continue; // never the delver's own cell
+        const idx = cellIndex(c, r, l.cols);
+        const gt = groundExtents(l.cells[idx].kind, l.cells[idx].elevation)[1];
+        if (y < gt) bump(occTarget, idx, 1); // solid mass crosses the sightline here
+      }
+    }
+
+    // ── Roof (ceiling) oculus: open a soft disc of overhead rock around the
+    // delver's on-screen position so the top-down camera can always see down
+    // onto them. This is intentionally a circle (not a strict sightline test):
+    // the roof otherwise walls the camera off from the whole pocket.
+    _v3.set(meCell.col, meCell.elev + 0.7, meCell.row);
+    const charDist = _v3.distanceTo(camPos);
+    _v3.project(camera);
+    const ccx = _v3.x, ccy = _v3.y;
     const c0 = Math.max(0, meCell.col - OCC_SCAN);
     const c1 = Math.min(l.cols - 1, meCell.col + OCC_SCAN);
     const r0 = Math.max(0, meCell.row - OCC_SCAN);
     const r1 = Math.min(l.rows - 1, meCell.row + OCC_SCAN);
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
-        if (c === meCell.col && r === meCell.row) continue;
+        if (l.cells[cellIndex(c, r, l.cols)].kind === 'wall') continue;
         const idx = cellIndex(c, r, l.cols);
-        const cell = l.cells[idx];
-        if (cell.kind === 'wall') {
-          if (_v3.set(c, 3, r).distanceTo(camPos) >= charDist - 0.4) continue; // not between
-          const w = circleWeight(c, 3, r, ccx, ccy);
-          if (w > 0) bump(occTarget, idx, w);
-        } else {
-          const roofY = cell.ceiling ?? CEIL_FALLBACK;
-          // Roof only opens where it's between the camera and the character.
-          if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
-          const w = circleWeight(c, roofY, r, ccx, ccy);
-          if (w > 0) bump(occTargetCeil, idx, w);
-        }
+        const roofY = l.cells[idx].ceiling ?? CEIL_FALLBACK;
+        // Roof only opens where it's between the camera and the character.
+        if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
+        const w = circleWeight(c, roofY, r, ccx, ccy);
+        if (w > 0) bump(occTargetCeil, idx, w);
       }
     }
     // Ease flagged cells toward faded, previously-flagged back toward solid.
@@ -1011,6 +1168,9 @@
     figTemplates.clear();
     voxelTerrain?.dispose();
     voxelTerrain = null;
+    // Shared across every level's materials, so it's freed once here.
+    terrainAtlas?.dispose();
+    terrainAtlas = null;
     renderer?.dispose();
     renderer?.domElement.remove();
   });
@@ -1031,6 +1191,7 @@
       _camOff = new THREE.Vector3();
       _camSph = new THREE.Spherical();
       _v3 = new THREE.Vector3();
+      _right = new THREE.Vector3();
     }
 
     const you = ps.find((p) => p.id === youId);
