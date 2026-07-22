@@ -113,7 +113,7 @@ describe('catalog integrity', () => {
 
   it('preserves the original kind ids the server relies on', () => {
     const ids = new Set(
-      [0, 20, 40, 60, 80].flatMap((d) => tierFor(d).map((k) => k.id)),
+      [0, 5, 10, 15, 20].flatMap((d) => tierFor(d).map((k) => k.id)),
     );
     for (const legacy of ['rat', 'goblin', 'skeleton', 'ghoul', 'imp', 'hound', 'sentinel', 'wraith', 'horror', 'fiend']) {
       expect(ids.has(legacy), legacy).toBe(true);
@@ -149,8 +149,11 @@ describe('mutations', () => {
     for (const m of mutated) {
       // The name is prefixed with the mutation adjective.
       expect(m.name).toMatch(/^[A-Z]/);
-      // Juggernauts are tankier/slower; explosive/toxic add an ability.
-      if (m.mutation === 'juggernaut') expect(m.actionTicks).toBeGreaterThan(100);
+      // Juggernauts are tankier/slower — slower than their un-mutated kind
+      // (relative, since a fast kind mutated still beats a normal one).
+      if (m.mutation === 'juggernaut') {
+        expect(m.actionTicks).toBeGreaterThan(kindById(m.kindId)!.actionTicks);
+      }
       if (m.mutation === 'explosive') expect(m.abilities).toContain('explodesOnDeath');
       if (m.mutation === 'toxic') expect(m.abilities).toContain('poisons');
     }

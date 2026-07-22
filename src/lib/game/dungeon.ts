@@ -73,7 +73,8 @@ type ResolvedOptions = Required<DungeonOptions>;
 const DEFAULTS: ResolvedOptions = {
   cols: 72,
   rows: 52,
-  levelCount: 100,
+  // Brogue-faithful depth: 26 levels, the Amulet of Yendor on the deepest.
+  levelCount: 26,
 };
 const COL_GROW = 0.8; // cells added per floor of depth
 const ROW_GROW = 0.6;

@@ -32,18 +32,32 @@ describe('interactablePrompt', () => {
     expect(p?.label).toBe('Ascend to level 2');
   });
 
-  it('shows the exit sealed until the boss falls, then escapable', () => {
+  it('guards the Amulet until the boss falls, then lets you claim it', () => {
     const d = generateDungeon(SEED);
     const last = getLevel(d, d.levelCount - 1);
     expect(last.exit).toBeDefined();
     const e = last.exit!;
     expect(interactablePrompt(last, e.col, e.row, false, d.levelCount)).toEqual({
       key: 'E',
-      label: 'The portal is sealed',
+      label: 'The Warden guards the Amulet',
       blocked: true,
     });
     expect(interactablePrompt(last, e.col, e.row, true, d.levelCount)?.label).toBe(
-      'Escape to the surface',
+      'Claim the Amulet of Yendor',
+    );
+    // Once claimed, the dais has nothing left to offer.
+    expect(interactablePrompt(last, e.col, e.row, true, d.levelCount, true)).toBeNull();
+  });
+
+  it('turns floor 0 up-stair into the victory escape once the Amulet is borne', () => {
+    const d = generateDungeon(SEED);
+    const l0 = getLevel(d, 0);
+    const s = l0.stairsUp!;
+    expect(interactablePrompt(l0, s.col, s.row, false, d.levelCount, false)?.label).toBe(
+      'Return to base camp',
+    );
+    expect(interactablePrompt(l0, s.col, s.row, false, d.levelCount, true)?.label).toBe(
+      'Escape to the surface — victory!',
     );
   });
 

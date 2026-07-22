@@ -46,7 +46,7 @@
   // driving the HUD interaction indicator. Hub actions are buttons, not tiles.
   const interactPrompt = $derived(
     !atHub && currentLevel && me && dungeon
-      ? interactablePrompt(currentLevel, me.col, me.row, client.bossDefeated, dungeon.levelCount)
+      ? interactablePrompt(currentLevel, me.col, me.row, client.bossDefeated, dungeon.levelCount, client.hasAmulet)
       : null,
   );
 

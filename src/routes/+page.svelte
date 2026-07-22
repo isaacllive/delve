@@ -53,7 +53,7 @@
       <h1 class="big">DELVE</h1>
       <p class="tag">A co-op descent into a procedural dark.</p>
       <button class="descend" onclick={() => (screen = 'create')}>Descend ▾</button>
-      <div class="feats">100 floors · 5 biomes · permadeath · co-op</div>
+      <div class="feats">26 floors · the Amulet of Yendor · permadeath</div>
       <a class="debug" href="/debug">▸ dungeon generator preview</a>
     </div>
   {:else}

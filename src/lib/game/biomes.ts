@@ -41,9 +41,10 @@ export interface Biome {
   sub: SubBiome[];
 }
 
-// Five biomes, 20 floors each: Caves → Ruins → Lava Zone → Ancient City →
-// Corrupted Halls. Each has a couple of sub-biomes that reshape the caves and
-// repaint them, so the descent keeps changing character within a band too.
+// Five biomes across the 26-floor descent (~5 floors each): Caves → Ruins →
+// Lava Zone → Ancient City → Corrupted Halls. Each has a couple of sub-biomes
+// that reshape the caves and repaint them, so the descent keeps changing
+// character within a band too.
 export const BIOMES: Biome[] = [
   {
     name: 'Caves',
@@ -172,8 +173,8 @@ export const BIOMES: Biome[] = [
   },
 ];
 
-/** Floors per biome band. */
-export const FLOORS_PER_BIOME = 20;
+/** Floors per biome band (5 biomes over 26 floors; the last band runs long). */
+export const FLOORS_PER_BIOME = 5;
 
 /** The biome for a given depth (clamped to the last biome past the bottom). */
 export function biomeForDepth(depth: number): Biome {

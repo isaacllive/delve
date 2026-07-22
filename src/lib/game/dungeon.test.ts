@@ -40,8 +40,8 @@ describe('generateDungeon (lazy, biome-aware)', () => {
     expect(JSON.stringify(a)).not.toBe(JSON.stringify(b));
   });
 
-  it('defaults to a 100-floor descent', () => {
-    expect(generateDungeon('x').levelCount).toBe(100);
+  it('defaults to a 26-floor descent (Brogue depth)', () => {
+    expect(generateDungeon('x').levelCount).toBe(26);
   });
 
   it('caches floors — repeated getLevel returns the same object', () => {
@@ -94,17 +94,18 @@ describe('generateDungeon (lazy, biome-aware)', () => {
   });
 
   it('maps grow larger with depth', () => {
-    const d = generateDungeon('grow', { levelCount: 100 });
-    expect(getLevel(d, 50).cols).toBeGreaterThan(getLevel(d, 0).cols);
+    const d = generateDungeon('grow', { levelCount: 26 });
+    expect(getLevel(d, 20).cols).toBeGreaterThan(getLevel(d, 0).cols);
   });
 
-  it('assigns the five biomes by depth band (20 floors each)', () => {
-    const d = generateDungeon('biomes', { levelCount: 100 });
+  it('assigns the five biomes by depth band (5 floors each)', () => {
+    const d = generateDungeon('biomes', { levelCount: 26 });
     expect(getLevel(d, 0).biomeName).toBe('Caves');
-    expect(getLevel(d, 20).biomeName).toBe('Ruins');
-    expect(getLevel(d, 40).biomeName).toBe('Lava Zone');
-    expect(getLevel(d, 60).biomeName).toBe('Ancient City');
-    expect(getLevel(d, 80).biomeName).toBe('Corrupted Halls');
+    expect(getLevel(d, 5).biomeName).toBe('Ruins');
+    expect(getLevel(d, 10).biomeName).toBe('Lava Zone');
+    expect(getLevel(d, 15).biomeName).toBe('Ancient City');
+    expect(getLevel(d, 20).biomeName).toBe('Corrupted Halls');
+    expect(getLevel(d, 25).biomeName).toBe('Corrupted Halls'); // last band runs long
   });
 
   it('creates verticality — ledges/pits/water somewhere in a run', () => {

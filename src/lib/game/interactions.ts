@@ -33,12 +33,15 @@ export function interactablePrompt(
   row: number,
   bossDefeated: boolean,
   levelCount: number,
+  hasAmulet = false,
 ): InteractPrompt | null {
-  // Exit portal (bottom floor, on the boss's cell). Sealed until the boss falls.
+  // The Amulet of Yendor (deepest floor, on the boss's dais). Guarded until the
+  // Warden falls; nothing to do here once it's been claimed.
   if (level.exit && level.exit.col === col && level.exit.row === row) {
+    if (hasAmulet) return null;
     return bossDefeated
-      ? { key: INTERACT_KEY, label: 'Escape to the surface' }
-      : { key: INTERACT_KEY, label: 'The portal is sealed', blocked: true };
+      ? { key: INTERACT_KEY, label: 'Claim the Amulet of Yendor' }
+      : { key: INTERACT_KEY, label: 'The Warden guards the Amulet', blocked: true };
   }
 
   const cell = cellAt(level, col, row);
@@ -49,10 +52,14 @@ export function interactablePrompt(
     return { key: INTERACT_KEY, label: `Descend to level ${level.depth + 2}` };
   }
   if (cell.kind === 'stairsUp') {
-    // Floor 0's up-stair retreats to the safe hub; deeper floors climb one up.
-    return level.depth === 0
-      ? { key: INTERACT_KEY, label: 'Return to base camp' }
-      : { key: INTERACT_KEY, label: `Ascend to level ${level.depth}` };
+    // Floor 0's up-stair escapes: victory if you bear the Amulet, else a retreat
+    // to the safe hub. Deeper floors climb one up.
+    if (level.depth === 0) {
+      return hasAmulet
+        ? { key: INTERACT_KEY, label: 'Escape to the surface — victory!' }
+        : { key: INTERACT_KEY, label: 'Return to base camp' };
+    }
+    return { key: INTERACT_KEY, label: `Ascend to level ${level.depth}` };
   }
   return null;
 }

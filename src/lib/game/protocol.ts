@@ -172,6 +172,8 @@ export type ServerMsg =
       discovered: ItemKindId[];
       tick: number;
       bossDefeated: boolean;
+      /** True once the Amulet of Yendor has been claimed — now escape upward. */
+      hasAmulet: boolean;
     }
   | { t: 'chat'; from: string; name: string; text: string; at: number }
   | { t: 'log'; text: string } // system/flavor line ("You fall into the dark…")

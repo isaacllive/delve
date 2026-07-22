@@ -31,8 +31,10 @@ export class GameClient {
   error = $state<string | null>(null);
   /** Bumped on every 'state' broadcast so renderers can cheaply detect change. */
   tick = $state(0);
-  /** True once the bottom-floor boss has been beaten (opens the exit portal). */
+  /** True once the bottom-floor boss has been beaten (bares the Amulet). */
   bossDefeated = $state(false);
+  /** True once the Amulet of Yendor has been claimed — escape upward to win. */
+  hasAmulet = $state(false);
   /** Set to the winner's name when someone completes the run. */
   won = $state<string | null>(null);
 
@@ -99,6 +101,7 @@ export class GameClient {
         this.hazards = msg.hazards;
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
+        this.hasAmulet = msg.hasAmulet;
         break;
       case 'chat':
         this.pushChat({ name: msg.name, text: msg.text, at: msg.at });

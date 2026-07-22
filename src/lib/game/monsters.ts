@@ -255,8 +255,8 @@ export function nextAwareness(
 // monster has MUTATION_CHANCE to gain a mutation modifier. Mutations mutate the
 // monster in place after `makeMonster` and document the runtime hook they need.
 
-/** First depth at which mutations can appear (Brogue depth-11 equivalent). */
-export const MUTATION_MIN_DEPTH = 40;
+/** First depth at which mutations can appear (Brogue depth 11 of 26). */
+export const MUTATION_MIN_DEPTH = 11;
 /** Per-monster chance of a mutation once past the threshold. */
 export const MUTATION_CHANCE = 0.12;
 

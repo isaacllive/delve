@@ -113,8 +113,10 @@ interface Run {
   dungeon: Dungeon;
   players: Map<string, Player>;
   tick: number;
-  /** True once the bottom-floor boss has been defeated (opens the exit). */
+  /** True once the bottom-floor boss has been defeated (bares the Amulet). */
   bossDefeated: boolean;
+  /** True once the Amulet of Yendor has been claimed — escape upward to win. */
+  hasAmulet: boolean;
   /** Monsters per floor index, spawned lazily when a player first enters. */
   monsters: Map<number, Monster[]>;
   /** Loot per floor index, spawned lazily alongside monsters. */
@@ -239,6 +241,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     hazards: hazardCells(run, floor),
     discovered: [...run.discovered],
     bossDefeated: run.bossDefeated,
+    hasAmulet: run.hasAmulet,
   };
 }
 
@@ -289,6 +292,7 @@ function joinRun(
       players: new Map(),
       tick: 0,
       bossDefeated: false,
+      hasAmulet: false,
       monsters: new Map(),
       loot: new Map(),
       traps: new Map(),
@@ -486,7 +490,7 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
     killMonster(run, floor, m);
     if (m.boss) {
       run.bossDefeated = true;
-      broadcast(run, { t: 'log', text: `${st.name} slays the ${m.name}! An exit shimmers open. (+${reward}g)` });
+      broadcast(run, { t: 'log', text: `${st.name} slays the ${m.name}! The Amulet of Yendor lies exposed. (+${reward}g)` });
     } else {
       const how = sneak ? 'ambush' : 'slay';
       send(player.ws, { t: 'log', text: `You ${how} the ${m.name} (−${dmg}). (+${reward}g)` });
@@ -724,6 +728,22 @@ function buyPotion(run: Run, player: Player): void {
   }
 }
 
+/** Claim the Amulet of Yendor: mark the run, and rouse the ENTIRE dungeon —
+ *  every monster on every generated floor wakes to hunt on the ascent, the
+ *  Brogue amulet-run gauntlet. Escape by climbing to the surface (floor 0's
+ *  up-stair). */
+function claimAmulet(run: Run, player: Player): void {
+  run.hasAmulet = true;
+  for (const list of run.monsters.values()) {
+    for (const m of list) if (m.hp > 0) m.state = 'hunting';
+  }
+  broadcast(run, {
+    t: 'log',
+    text: `${player.state.name} claims the Amulet of Yendor! The dungeon roars awake — flee to the surface!`,
+  });
+  broadcastState(run);
+}
+
 function handleInteract(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive) return;
@@ -745,21 +765,20 @@ function handleInteract(run: Run, player: Player): void {
     return;
   }
 
-  // ── Exit portal (bottom floor, after the boss falls) → escape. ───────────
+  // ── The Amulet of Yendor (deepest floor, on the fallen Warden's dais). ────
   if (level.exit && st.col === level.exit.col && st.row === level.exit.row) {
-    if (run.bossDefeated) {
-      broadcast(run, { t: 'victory', by: st.name });
-      const camp = getLevel(run.dungeon, CAMP_DEPTH);
-      goTo(run, player, CAMP_DEPTH, camp.entry);
-      send(player.ws, { t: 'log', text: `You escape to the surface, victorious!` });
-      broadcastState(run);
+    if (!run.bossDefeated) {
+      send(player.ws, { t: 'log', text: `The Warden guards the Amulet — it cannot be taken while it stirs.` });
+    } else if (run.hasAmulet) {
+      send(player.ws, { t: 'log', text: `You already bear the Amulet. Climb to the surface to escape.` });
     } else {
-      send(player.ws, { t: 'log', text: `The portal is sealed — the Warden still stirs.` });
+      claimAmulet(run, player);
     }
     return;
   }
 
-  // ── Stairs. Floor 0's up-stair retreats to the base camp. ────────────────
+  // ── Stairs. Floor 0's up-stair escapes (victory with the Amulet, else a
+  //    retreat to the base camp). ───────────────────────────────────────────
   const cell = cellAt(level, st.col, st.row);
   if (!cell) return;
   if (cell.kind === 'stairsDown' && st.level + 1 < run.dungeon.levelCount) {
@@ -769,6 +788,14 @@ function handleInteract(run: Run, player: Player): void {
     broadcastState(run);
   } else if (cell.kind === 'stairsUp') {
     if (st.level === 0) {
+      if (run.hasAmulet) {
+        broadcast(run, { t: 'victory', by: st.name });
+        const camp = getLevel(run.dungeon, CAMP_DEPTH);
+        goTo(run, player, CAMP_DEPTH, camp.entry);
+        send(player.ws, { t: 'log', text: `You bear the Amulet of Yendor into the light — victorious!` });
+        broadcastState(run);
+        return;
+      }
       const camp = getLevel(run.dungeon, CAMP_DEPTH);
       goTo(run, player, CAMP_DEPTH, camp.entry);
       broadcast(run, { t: 'log', text: `${st.name} retreats to the base camp.` });
