@@ -86,6 +86,13 @@ export function compassLabel(facing: number): 'N' | 'NE' | 'E' | 'SE' | 'S' | 'S
   return dirs[idx];
 }
 
+/** Rotate a facing by `winds` eighth-turns (45° each), snapping to the 8-wind
+ *  grid and normalising to [0, 2π). +1 = one wind clockwise, −1 = anticlockwise. */
+export function turnFacing(facing: number, winds: number): number {
+  const idx = (Math.round(facing / (Math.PI / 4)) + winds) & 7; // & 7 wraps both signs
+  return idx * (Math.PI / 4);
+}
+
 /** Compass heading in radians (0 = N, clockwise) for a grid move delta. */
 export function headingOf(dcol: number, drow: number): number {
   // North is −row; clockwise means East (+col) is +PI/2.
@@ -96,7 +103,8 @@ export function headingOf(dcol: number, drow: number): number {
 /** Messages the client sends to the server. */
 export type ClientMsg =
   | { t: 'join'; code: string; name: string; seed?: string; classId?: string }
-  | { t: 'move'; dcol: number; drow: number }
+  | { t: 'move'; dcol: number; drow: number; face?: boolean } // face:false steps without re-facing (walk backward)
+  | { t: 'turn'; dir: -1 | 1 } // rotate facing one wind (45°): −1 = left/CCW, +1 = right/CW
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
   | { t: 'use' } // quaff a healing potion
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0

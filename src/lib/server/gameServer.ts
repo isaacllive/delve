@@ -35,6 +35,7 @@ import {
 } from '../game/loot.ts';
 import {
   headingOf,
+  turnFacing,
   MAX_CHAT_LEN,
   MAX_NAME_LEN,
   type ClientMsg,
@@ -262,7 +263,7 @@ function collectLootHere(run: Run, player: Player): void {
   }
 }
 
-function handleMove(run: Run, player: Player, dcol: number, drow: number): void {
+function handleMove(run: Run, player: Player, dcol: number, drow: number, face = true): void {
   const st = player.state;
   if (!st.alive) return; // the fallen do not move
   const level = getLevel(run.dungeon, st.level);
@@ -270,7 +271,8 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   const dy = Math.sign(drow);
   if (dx === 0 && dy === 0) return;
   // Face the way we're heading even if the step is blocked (turn in place).
-  st.facing = headingOf(dx, dy);
+  // Backward steps (face:false) keep the current facing — turning is its own intent.
+  if (face) st.facing = headingOf(dx, dy);
   const nc = st.col + dx;
   const nr = st.row + dy;
 
@@ -315,6 +317,16 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
     spotTraps(run, player);
     collectLootHere(run, player);
   }
+  broadcastState(run);
+}
+
+/** Turn in place by one wind (45°). Facing is authoritative here; the client
+ *  turns to face the closest of the 8 winds, so all headings are reachable
+ *  without a step. Blocked or not, turning never changes position. */
+function handleTurn(run: Run, player: Player, dir: number): void {
+  const st = player.state;
+  if (!st.alive) return; // the fallen do not turn
+  st.facing = turnFacing(st.facing, dir < 0 ? -1 : 1);
   broadcastState(run);
 }
 
@@ -653,7 +665,10 @@ function createWss(): WebSocketServer {
       const { run, player } = joined;
       switch (msg.t) {
         case 'move':
-          handleMove(run, player, msg.dcol, msg.drow);
+          handleMove(run, player, msg.dcol, msg.drow, msg.face !== false);
+          break;
+        case 'turn':
+          handleTurn(run, player, msg.dir);
           break;
         case 'interact':
           handleInteract(run, player);

@@ -119,8 +119,11 @@ export class GameClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }
 
-  move(dcol: number, drow: number): void {
-    this.send({ t: 'move', dcol, drow });
+  move(dcol: number, drow: number, face = true): void {
+    this.send({ t: 'move', dcol, drow, face });
+  }
+  turn(dir: -1 | 1): void {
+    this.send({ t: 'turn', dir });
   }
   interact(): void {
     this.send({ t: 'interact' });

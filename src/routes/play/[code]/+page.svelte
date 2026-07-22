@@ -55,22 +55,21 @@
     return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
   }
 
-  // Movement is CAMERA-RELATIVE: keys map to an on-screen heading (0 = up /
-  // into the screen, clockwise), which we rotate by the camera yaw and snap to
-  // the 8 grid directions — so "forward" is always where the character faces
-  // (the camera sits behind them). WASD / arrows / vi-keys (hjkl) + yubn diags.
-  const SCREEN_DIR: Record<string, number> = {
-    arrowup: 0, w: 0, k: 0,
-    u: Math.PI / 4,
-    arrowright: Math.PI / 2, d: Math.PI / 2, l: Math.PI / 2,
-    n: (3 * Math.PI) / 4,
-    arrowdown: Math.PI, s: Math.PI, j: Math.PI,
-    b: (5 * Math.PI) / 4,
-    arrowleft: (3 * Math.PI) / 2, a: (3 * Math.PI) / 2, h: (3 * Math.PI) / 2,
-    y: (7 * Math.PI) / 4,
+  // Controls are TANK-style around the character's facing: Left/Right rotate the
+  // heading one wind (45°) at a time — so a turn always steps to the CLOSEST of
+  // the 8 directions, and every heading is reachable — while Up/Down step forward
+  // and backward along that heading. The follow camera sits behind the delver, so
+  // "forward" is always into the screen. WASD / arrows / vi-keys (h l = turn,
+  // k j = forward/back).
+  const TURN_KEYS: Record<string, -1 | 1> = {
+    arrowleft: -1, a: -1, h: -1,
+    arrowright: 1, d: 1, l: 1,
   };
+  const FORWARD_KEYS = new Set(['arrowup', 'w', 'k']);
+  const BACK_KEYS = new Set(['arrowdown', 's', 'j']);
 
-  /** Snap a world heading (0 = N/−row, clockwise) to an 8-way grid step. */
+  /** Grid step (dcol, drow) for a world heading (0 = N/−row, clockwise),
+   *  snapped to the 8 winds. */
   function stepFor(worldHeading: number): [number, number] {
     const k = ((Math.round(worldHeading / (Math.PI / 4)) % 8) + 8) % 8;
     const a = (k * Math.PI) / 4;
@@ -99,12 +98,22 @@
       client.usePotion();
       return;
     }
-    const screen = SCREEN_DIR[key];
-    if (screen !== undefined) {
+    const turn = TURN_KEYS[key];
+    if (turn !== undefined) {
       e.preventDefault();
-      // world heading appears on screen at (heading + cameraYaw) → invert.
-      const [dc, dr] = stepFor(screen - cameraYaw);
+      client.turn(turn);
+      return;
+    }
+    // Step forward along the current facing, or backward without re-facing.
+    const facing = client.me?.facing ?? 0;
+    if (FORWARD_KEYS.has(key)) {
+      e.preventDefault();
+      const [dc, dr] = stepFor(facing);
       client.move(dc, dr);
+    } else if (BACK_KEYS.has(key)) {
+      e.preventDefault();
+      const [dc, dr] = stepFor(facing + Math.PI);
+      client.move(dc, dr, false);
     }
   }
 
