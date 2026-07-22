@@ -99,7 +99,7 @@
     <div class="panel hint">
       <div><b>Move</b> WASD / arrows · <b>attack</b> into foes</div>
       <div><b>Use</b> Space / E · <b>Heal</b> Q · <b>Quaff</b> 1–9</div>
-      <div><b>Travel</b> click tile · <b>Explore</b> X · <b>Stairs</b> G</div>
+      <div><b>Path</b> click · <b>Go</b> dbl-click · <b>Explore</b> X · <b>Stairs</b> G</div>
       <div><b>Look</b> drag · <b>Zoom</b> wheel</div>
     </div>
   </div>

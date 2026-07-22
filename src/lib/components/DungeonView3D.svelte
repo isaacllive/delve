@@ -69,8 +69,10 @@
     /** Reports the camera's azimuth (radians) whenever it changes, so the HUD
      *  compass can orient relative to the current view. */
     onYaw?: (yaw: number) => void;
-    /** A click on the floor resolves to a grid cell (for click-to-travel). */
-    onPickCell?: (col: number, row: number) => void;
+    /** A click on the floor resolves to a grid cell. `confirm` is true on a
+     *  double-click (same cell, quick) — a single click previews the route, a
+     *  double-click commits to walking it. */
+    onPickCell?: (col: number, row: number, confirm: boolean) => void;
     /** The current floor's fog-memory (explored) set, pushed each fog update so
      *  auto-explore can find the nearest un-seen cell. Same array ref each tick. */
     onExplored?: (depth: number, explored: boolean[]) => void;
@@ -415,6 +417,8 @@
 
   // Click-to-travel: a click (not a drag) on the floor resolves to a grid cell.
   let _pickDown: { x: number; y: number } | null = null;
+  let _lastPick: { t: number; x: number; y: number } | null = null;
+  const DOUBLE_CLICK_MS = 500; // max gap for a click pair to count as a confirm
   function setupPicking(dom: HTMLElement) {
     const ray = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
@@ -437,7 +441,16 @@
       // Intersect a horizontal plane at the delver's floor height, then snap.
       plane.setFromNormalAndCoplanarPoint(up, coplanar.set(0, meCell.elev, 0));
       if (!ray.ray.intersectPlane(plane, hit)) return;
-      onPickCell(Math.round(hit.x), Math.round(hit.z));
+      const col = Math.round(hit.x), row = Math.round(hit.z);
+      // Two quick clicks at nearly the same screen spot = a confirm (double
+      // click): the first previews the route, the double-click commits. Keyed on
+      // screen position (not grid cell) so the easing follow-camera — which can
+      // shift which cell a fixed pixel hits between clicks — doesn't break it.
+      const now = performance.now();
+      const confirm =
+        !!_lastPick && now - _lastPick.t < DOUBLE_CLICK_MS && Math.hypot(e.clientX - _lastPick.x, e.clientY - _lastPick.y) < 24;
+      _lastPick = { t: now, x: e.clientX, y: e.clientY };
+      onPickCell(col, row, confirm);
     });
   }
 

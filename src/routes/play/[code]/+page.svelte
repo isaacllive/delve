@@ -71,8 +71,10 @@
   // on arrival, a blocked step, a nearby hunting foe, or any manual key. The
   // renderer feeds us the explored set for auto-explore targets.
   const TRAVEL_STEP_MS = 165; // pace between steps (a visible walk, not a teleport)
-  const TRAVEL_LEAD_MS = 320; // show the route this long before the first step
-  let travel = $state<{ path: Step[]; i: number } | null>(null);
+  const TRAVEL_LEAD_MS = 220; // show the route this long before the first step
+  // `active` false = a previewed route (drawn but not walked, awaiting a
+  // double-click to commit); true = actively walking it.
+  let travel = $state<{ path: Step[]; i: number; active: boolean } | null>(null);
   let travelTimer: ReturnType<typeof setTimeout> | null = null;
   let travelSentFrom: Step | null = null;
   let explored: boolean[] | null = null;
@@ -108,19 +110,33 @@
     return s;
   }
 
-  function beginTravelTo(col: number, row: number): void {
+  /** Plot a route from the delver to (col,row), or null if none/blocked/at-hub. */
+  function plotPath(col: number, row: number): Step[] | null {
     const m = client.me;
-    if (!currentLevel || !m || !m.alive || atHub) return;
+    if (!currentLevel || !m || !m.alive || atHub) return null;
     const path = findPath(
       currentLevel,
       { col: m.col, row: m.row },
       { col, row },
       { avoidHazards: true, blocked: armedTrapCells() },
     );
-    if (!path || path.length === 0) return;
+    return path && path.length ? path : null;
+  }
+
+  /** Single click: draw the route as a preview without moving. */
+  function previewTravelTo(col: number, row: number): void {
+    const path = plotPath(col, row);
     cancelTravel();
-    travel = { path, i: 0 };
-    // Draw the route now; start walking after a short lead so it's visible first.
+    if (path) travel = { path, i: 0, active: false };
+  }
+
+  /** Double click (or X/G): commit to the route and walk it. */
+  function beginTravelTo(col: number, row: number): void {
+    const path = plotPath(col, row);
+    cancelTravel();
+    if (!path) return;
+    travel = { path, i: 0, active: true };
+    // The route is already visible; start walking after a short lead.
     travelTimer = setTimeout(walkStep, TRAVEL_LEAD_MS);
   }
 
@@ -130,7 +146,7 @@
     travelTimer = null;
     const t = travel;
     const m = client.me;
-    if (!t || !m || !m.alive || atHub) {
+    if (!t || !t.active || !m || !m.alive || atHub) {
       cancelTravel();
       return;
     }
@@ -292,7 +308,7 @@
       bossDefeated={client.bossDefeated}
       travelPath={travelPath}
       onYaw={(y) => (cameraYaw = y)}
-      onPickCell={(c, r) => beginTravelTo(c, r)}
+      onPickCell={(c, r, confirm) => (confirm ? beginTravelTo(c, r) : previewTravelTo(c, r))}
       onExplored={(depth, ex) => { explored = ex; exploredDepth = depth; }}
       debugShowAllTerrain={debugFlags.showAllTerrain}
       debugHideCeiling={debugFlags.hideCeiling}
