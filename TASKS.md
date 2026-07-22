@@ -110,7 +110,17 @@ systems). 382 tests, 0 type errors throughout.
       generation; thrown potions — need the gas/fire sim.)*
   - [ ] **Enchant on gear + Scroll of Enchanting** (needs weapons/armor items).
   - [ ] **Detect Magic** polarity + metered generation; thrown/gas potions.
-- [ ] **26-depth structure + amulet win** replacing the 100-floor boss/portal.
+- [x] **26-depth structure + amulet win** — `levelCount` 26, 5-floor biome bands,
+      mutations from depth 11. The deepest boss guards the **Amulet of Yendor**;
+      claiming it wakes the whole dungeon, and you win by **climbing back to the
+      surface** (floor-0 up-stair).
+- [x] **Nutrition / food clock** — stomach drains ~1/turn (Brogue thresholds);
+      starve → 1 HP/turn; rations refill; HUD hunger meter; start with a ration.
+- [x] **Machines v1 — commutation altars + metered enchant** — altars on eligible
+      mid-run floors swap equipped weapon/armor enchant (one use); Scroll of
+      Enchanting removed from random drops and metered ~every third floor.
+  - [ ] **Guardian-puzzle vaults** (levers/portcullis, guarded reward rooms using
+        roomgen's room/door metadata) — still future work.
 
 *(The items below predate the refocus and are largely on hold; several — stealth
 states, persistent fog, traps, permadeath, no-XP — already align with Brogue and
