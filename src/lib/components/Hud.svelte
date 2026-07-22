@@ -53,6 +53,7 @@
       <div class="me-class" style="--accent:{myClass.accent}">
         <b>{myClass.name}</b>
         <span class="hp">♥ {me.hp}/{me.hpMax}</span>
+        <span class="str" title="Strength — grows only by drinking a Potion of Strength">💪 {me.strength}</span>
         <span class="purse">🪙 {me.gold} · 🧪 {me.potions}</span>
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}

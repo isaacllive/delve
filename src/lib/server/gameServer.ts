@@ -18,6 +18,7 @@ import {
 import { blocksMove, cellAt, hazardAt, occluderHeight } from '../game/terrain.ts';
 import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
+import { STARTING_STRENGTH } from '../game/character.ts';
 import {
   isUnaware,
   nextAwareness,
@@ -202,6 +203,9 @@ function joinRun(
     torchRadius: cls.torchRadius,
     hp: cls.hp,
     hpMax: cls.hp,
+    // Brogue-faithful: everyone starts at Strength 12, regardless of class.
+    // (Starting HP is still class-driven pending the classless refocus.)
+    strength: STARTING_STRENGTH,
     gold: 0,
     potions: 1,
     facing: 0, // face north — toward the camp's descent portal

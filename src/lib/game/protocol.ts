@@ -23,9 +23,13 @@ export interface PlayerState {
   elevation: number;
   /** Torch light/vision radius this player carries (from the class). */
   torchRadius: number;
-  /** Current / max hit points (0 = dead; permadeath). */
+  /** Current / max hit points (0 = dead; permadeath). Max HP grows ONLY by
+   *  drinking a Potion of Life — never by experience (see character.ts). */
   hp: number;
   hpMax: number;
+  /** Strength: gates weapon/armor requirements and scales combat via netEnchant
+   *  (combat.ts). Starts at 12 and grows ONLY by drinking a Potion of Strength. */
+  strength: number;
   /** Gold carried this expedition (lost on death). */
   gold: number;
   /** Healing potions carried. */

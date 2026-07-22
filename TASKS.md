@@ -40,7 +40,15 @@ plan) and `docs/brogue-features.md` (mechanic selection). Roadmap phases:
       Numbers ported verbatim from BrogueCE.
 - [ ] **Wire turn loop into `gameServer.ts`** — player action advances the
       clock; monsters act via `runUntilPlayer`; retire the wall-clock interval.
-- [ ] **Strength stat + HP/STR-from-items only** on the character model.
+- [x] **Strength stat + HP/STR-from-items only** — pure `character.ts` (Brogue
+      baselines STR 12 / HP 30; `potionOfStrength` +1, `potionOfLife` +10 max HP
+      & full heal; `healBy` cap) + tests. `strength` added to `PlayerState`,
+      initialized to 12 for every delver, shown in the HUD. *(The Potion of
+      Life/Strength pickups that TRIGGER the growth arrive with the item system;
+      starting HP is still class-driven — see the classless note below.)*
+  - [ ] **Retire classes → classless STR 12 / HP 30 for all** (Brogue is
+        classless; classes become a possible future extension). Touches lobby /
+        join flow / HUD — deferred, out of scope for the stat change.
 - [ ] **Item system** (`items.ts`): inventory, `use-item` intent, first
       potions/scrolls; per-run identification table; enchant on gear.
 - [ ] **26-depth structure + amulet win** replacing the 100-floor boss/portal.
