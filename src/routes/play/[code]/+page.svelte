@@ -7,6 +7,7 @@
   import Hud from '$lib/components/Hud.svelte';
   import HubScreen from '$lib/components/HubScreen.svelte';
   import DebugMenu, { type DebugFlags } from '$lib/components/DebugMenu.svelte';
+  import Minimap from '$lib/components/Minimap.svelte';
 
   let { data } = $props();
 
@@ -157,6 +158,13 @@
       biome={currentLevel?.biomeName}
       subBiome={currentLevel?.subBiomeName}
       onChat={(t) => client.sendChat(t)}
+    />
+    <Minimap
+      level={currentLevel}
+      players={client.players}
+      monsters={client.monsters}
+      youId={client.youId}
+      tick={client.tick}
     />
   {:else}
     <div class="loading">
