@@ -15,7 +15,7 @@
 
   import { onMount, onDestroy } from 'svelte';
   import type { DungeonLevel } from '$lib/game/dungeon.ts';
-  import type { LootState, MonsterState, PlayerState } from '$lib/game/protocol.ts';
+  import type { LootState, MonsterAwareness, MonsterState, PlayerState, TrapState } from '$lib/game/protocol.ts';
   import { cellIndex } from '$lib/game/grid.ts';
   import { occluderHeight, WALL_HEIGHT } from '$lib/game/terrain.ts';
   import { hasLineOfSight } from '$lib/game/los.ts';
@@ -31,6 +31,7 @@
     players,
     monsters = [],
     loot = [],
+    traps = [],
     youId,
     tick,
     bossDefeated = false,
@@ -55,6 +56,7 @@
     players: PlayerState[];
     monsters?: MonsterState[];
     loot?: LootState[];
+    traps?: TrapState[];
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
@@ -105,6 +107,10 @@
   // the throwaway primitives but never the cached templates.
   let kit: ModelKit | null = null;
   const figTemplates = new Map<string, import('three').Group>();
+  // Billboard sprite materials for the monster awareness glyphs (💤 / ❓ / ‼️),
+  // built once per state + reused. Marked shared on each Sprite so the avatar
+  // refresh teardown leaves the cached material/texture intact.
+  const awarenessMats = new Map<MonsterAwareness, import('three').SpriteMaterial>();
   let raf = 0;
   let disposed = false;
   // Flipped true once the async Three.js init finishes. It's $state so the
@@ -118,6 +124,11 @@
   let fullMatrix: import('three').Matrix4[] = [];
   let baseColor: import('three').Color[] = [];
   let revealed: boolean[] = [];
+  // Persistent fog memory per floor: once seen, terrain is dimly remembered even
+  // after you leave and return (Brogue-style). Keyed by depth; `revealed` aliases
+  // the current floor's array, so in-place reveals keep accumulating across
+  // revisits instead of resetting every time the level is rebuilt.
+  const revealedByFloor = new Map<number, boolean[]>();
 
   // ── fade state ──────────────────────────────────────────────────────────
   // Terrain and ceiling tiles fade their colour in/out over time instead of
@@ -428,7 +439,12 @@
 
     fullMatrix = new Array(count);
     baseColor = new Array(count);
-    revealed = new Array(count).fill(false);
+    // Restore this floor's fog memory if we've visited before (dimensions are
+    // deterministic per depth, so a cached array always matches); otherwise start
+    // fresh. Store the reference so later reveals persist for the next revisit.
+    const priorReveal = revealedByFloor.get(l.depth);
+    revealed = priorReveal && priorReveal.length === count ? priorReveal : new Array(count).fill(false);
+    revealedByFloor.set(l.depth, revealed);
     terrTarget = new Float32Array(count * 3);
     terrShow = new Uint8Array(count);
     terrFade = new Float32Array(count);
@@ -787,6 +803,41 @@
     return clone;
   }
 
+  const AWARENESS_GLYPH: Record<MonsterAwareness, string> = {
+    sleeping: '💤',
+    wandering: '❓',
+    hunting: '‼️',
+  };
+
+  /** A camera-facing sprite showing a monster's awareness glyph, or null when
+   *  THREE isn't ready. The SpriteMaterial (with its canvas glyph texture) is
+   *  cached per state and reused; each Sprite is tagged shared so the avatar
+   *  refresh frees throwaway meshes but leaves the cached material alone. */
+  function awarenessSprite(state: MonsterAwareness): import('three').Sprite | null {
+    if (!THREE) return null;
+    let mat = awarenessMats.get(state);
+    if (!mat) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const ctx = cv.getContext('2d');
+      if (ctx) {
+        ctx.font = '46px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(AWARENESS_GLYPH[state], 32, 36);
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.needsUpdate = true;
+      // depthTest off so the tag floats readable over the creature even through
+      // rock; not fogged so distant states stay legible.
+      mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, fog: false, transparent: true });
+      awarenessMats.set(state, mat);
+    }
+    const sprite = new THREE.Sprite(mat);
+    sprite.userData.shared = true; // keep the cached material on refresh teardown
+    return sprite;
+  }
+
   function refreshAvatars(viewers: PlayerState[]) {
     if (!avatarGroup || !THREE || !scene) return;
     // Rebuild the small avatar set + torch lights each update (cheap: a handful).
@@ -833,6 +884,40 @@
         scene.add(bl);
         torchLights.push(bl);
       }
+      // Awareness tag floating above the creature (💤 asleep, ❓ investigating,
+      // ‼️ hunting). Skip the boss — it's permanently, obviously hostile.
+      if (!mo.boss) {
+        const tag = awarenessSprite(mo.state);
+        if (tag) {
+          tag.position.set(mo.col, 1.5, mo.row);
+          tag.scale.setScalar(0.6);
+          tag.renderOrder = 18;
+          avatarGroup.add(tag);
+        }
+      }
+    }
+
+    // Revealed traps — a flat marker on the plate. Armed-but-spotted traps show
+    // a bright warning ring; sprung ones a spent, dimmed disc so you can tell
+    // which are still live. Only traps the server has revealed arrive here.
+    for (const tr of traps) {
+      const armed = !tr.sprung;
+      const color = tr.kind === 'pit' ? 0xff8a3a : 0xffd23a;
+      const ring = new THREE.Mesh(
+        armed
+          ? new THREE.TorusGeometry(0.32, 0.06, 8, 20)
+          : new THREE.CircleGeometry(0.3, 20),
+        new THREE.MeshBasicMaterial({
+          color: armed ? color : 0x555555,
+          depthTest: false,
+          transparent: true,
+          opacity: armed ? 0.9 : 0.5,
+        }),
+      );
+      ring.rotation.x = -Math.PI / 2; // lie flat on the floor
+      ring.position.set(tr.col, 0.06, tr.row);
+      ring.renderOrder = 13;
+      avatarGroup.add(ring);
     }
 
     // Loot: gold piles (tapered coin mounds) and potions (standing vials). Gold
@@ -1197,6 +1282,12 @@
     // nothing else owns them now).
     for (const t of figTemplates.values()) disposeObject3D(t);
     figTemplates.clear();
+    // Free the cached awareness-glyph sprite materials + their canvas textures.
+    for (const mat of awarenessMats.values()) {
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    awarenessMats.clear();
     voxelTerrain?.dispose();
     voxelTerrain = null;
     // Shared across every level's materials, so it's freed once here.

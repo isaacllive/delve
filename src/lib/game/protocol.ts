@@ -36,6 +36,12 @@ export interface PlayerState {
   alive: boolean;
 }
 
+/** A monster's awareness of the delvers (Brogue-style stealth states):
+ *  `sleeping` (unaware, stationary — sneak-attackable), `wandering`
+ *  (disturbed, investigating — still sneak-attackable), `hunting` (alert,
+ *  chasing). The client tints/indicates each state (💤 / ❓ / ‼️). */
+export type MonsterAwareness = 'sleeping' | 'wandering' | 'hunting';
+
 /** A monster's live state, broadcast for the floor the viewer is on. */
 export interface MonsterState {
   id: string;
@@ -47,6 +53,21 @@ export interface MonsterState {
   hp: number;
   hpMax: number;
   boss: boolean;
+  /** Awareness state, for the client's stealth indicator. */
+  state: MonsterAwareness;
+}
+
+/** A trap revealed to the client (sprung, or spotted by standing next to it).
+ *  Hidden traps are never sent — the server keeps them secret until triggered
+ *  or noticed, so the client can't wall-hack their locations. */
+export interface TrapState {
+  id: string;
+  kind: 'pit' | 'dart';
+  col: number;
+  row: number;
+  level: number;
+  /** True once triggered (spent); false = spotted but still armed. */
+  sprung: boolean;
 }
 
 /** A loot pickup on the floor, broadcast for the viewer's floor. */
@@ -92,6 +113,7 @@ export type ServerMsg =
       players: PlayerState[];
       monsters: MonsterState[];
       loot: LootState[];
+      traps: TrapState[];
       tick: number;
       bossDefeated: boolean;
     }

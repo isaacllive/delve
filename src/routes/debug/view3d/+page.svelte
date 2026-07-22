@@ -39,8 +39,8 @@
   const monsters = $derived.by<MonsterState[]>(() => {
     const e = level.entry;
     return [
-      { id: 'm1', name: 'Goblin', color: 0x6aa84f, level: level.depth, col: e.col + 2, row: e.row, hp: 6, hpMax: 6, boss: false },
-      { id: 'm2', name: 'Skeleton', color: 0xd9d2c0, level: level.depth, col: e.col, row: e.row + 2, hp: 8, hpMax: 8, boss: false },
+      { id: 'm1', name: 'Goblin', color: 0x6aa84f, level: level.depth, col: e.col + 2, row: e.row, hp: 6, hpMax: 6, boss: false, state: 'hunting' },
+      { id: 'm2', name: 'Skeleton', color: 0xd9d2c0, level: level.depth, col: e.col, row: e.row + 2, hp: 8, hpMax: 8, boss: false, state: 'sleeping' },
     ];
   });
 </script>

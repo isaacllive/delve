@@ -15,9 +15,17 @@ import {
   type Dungeon,
   type DungeonLevel,
 } from '../game/dungeon.ts';
-import { blocksMove, cellAt, hazardAt } from '../game/terrain.ts';
+import { blocksMove, cellAt, hazardAt, occluderHeight } from '../game/terrain.ts';
+import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
-import { spawnMonsters, type Monster } from '../game/monsters.ts';
+import {
+  isUnaware,
+  nextAwareness,
+  spawnMonsters,
+  SNEAK_MULTIPLIER,
+  type Monster,
+} from '../game/monsters.ts';
+import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   monsterReward,
   POTION_COST,
@@ -34,6 +42,7 @@ import {
   type MonsterState,
   type PlayerState,
   type ServerMsg,
+  type TrapState,
 } from '../game/protocol.ts';
 
 /** Aggro range (cells) within which a monster chases a player. */
@@ -56,6 +65,8 @@ interface Run {
   monsters: Map<number, Monster[]>;
   /** Loot per floor index, spawned lazily alongside monsters. */
   loot: Map<number, Loot[]>;
+  /** Hidden traps per floor index, spawned lazily alongside monsters. */
+  traps: Map<number, Trap[]>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -80,20 +91,28 @@ function monstersOn(run: Run, floor: number): Monster[] {
 function lootOn(run: Run, floor: number): Loot[] {
   return run.loot.get(floor) ?? [];
 }
+function trapsOn(run: Run, floor: number): Trap[] {
+  return run.traps.get(floor) ?? [];
+}
 
-/** Spawn a floor's monsters + loot on first visit (never for the camp). */
+/** Spawn a floor's monsters + loot + traps on first visit (never for the
+ *  camp). */
 function ensureMonsters(run: Run, floor: number): void {
   if (floor < 0 || run.monsters.has(floor)) return;
   const level = getLevel(run.dungeon, floor);
   run.monsters.set(floor, spawnMonsters(run.seed, level));
   run.loot.set(floor, spawnLoot(run.seed, level));
+  run.traps.set(floor, spawnTraps(run.seed, level));
 }
 
 function toMonsterState(m: Monster, floor: number): MonsterState {
-  return { id: m.id, name: m.name, color: m.color, level: floor, col: m.col, row: m.row, hp: m.hp, hpMax: m.hpMax, boss: m.boss };
+  return { id: m.id, name: m.name, color: m.color, level: floor, col: m.col, row: m.row, hp: m.hp, hpMax: m.hpMax, boss: m.boss, state: m.state };
 }
 function toLootState(l: Loot, floor: number): LootState {
   return { id: l.id, kind: l.kind, col: l.col, row: l.row, level: floor };
+}
+function toTrapState(t: Trap, floor: number): TrapState {
+  return { id: t.id, kind: t.kind, col: t.col, row: t.row, level: floor, sprung: t.sprung };
 }
 
 function stateMsg(run: Run, youId: string): ServerMsg {
@@ -106,6 +125,9 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     players: [...run.players.values()].map((p) => p.state),
     monsters: monstersOn(run, floor).map((m) => toMonsterState(m, floor)),
     loot: lootOn(run, floor).map((l) => toLootState(l, floor)),
+    // Only reveal traps that are sprung or have been spotted — armed, unnoticed
+    // traps stay secret so the client can't map them out.
+    traps: trapsOn(run, floor).filter((t) => t.revealed).map((t) => toTrapState(t, floor)),
     bossDefeated: run.bossDefeated,
   };
 }
@@ -159,6 +181,7 @@ function joinRun(
       bossDefeated: false,
       monsters: new Map(),
       loot: new Map(),
+      traps: new Map(),
     };
     runs.set(code, run);
   }
@@ -197,7 +220,11 @@ function monsterAt(run: Run, floor: number, col: number, row: number): Monster |
 /** Player bump-attacks a monster. On kill, remove it, drop gold; the boss opens
  *  the exit. */
 function attackMonster(run: Run, player: Player, floor: number, m: Monster): void {
-  const dmg = getClass(player.state.classId).attack;
+  // Striking an unaware monster (sleeping / wandering) lands a sneak-attack
+  // bonus; the blow then wakes it (or its corpse is moot).
+  const sneak = isUnaware(m.state);
+  const dmg = getClass(player.state.classId).attack * (sneak ? SNEAK_MULTIPLIER : 1);
+  m.state = 'hunting';
   m.hp -= dmg;
   if (m.hp <= 0) {
     m.hp = 0;
@@ -209,8 +236,11 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
       run.bossDefeated = true;
       broadcast(run, { t: 'log', text: `${player.state.name} slays the ${m.name}! An exit shimmers open. (+${reward}g)` });
     } else {
-      send(player.ws, { t: 'log', text: `You strike down the ${m.name}. (+${reward}g)` });
+      const how = sneak ? 'ambush' : 'strike down';
+      send(player.ws, { t: 'log', text: `You ${how} the ${m.name}. (+${reward}g)` });
     }
+  } else if (sneak) {
+    send(player.ws, { t: 'log', text: `You catch the ${m.name} unaware — a heavy blow!` });
   }
   broadcastState(run);
 }
@@ -259,31 +289,107 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   st.row = nr;
   st.elevation = elevationOn(level, nc, nr);
 
-  // Hazard resolution on entry.
-  const haz = hazardAt(level, nc, nr);
-  if (haz === 'pit') {
-    const below = st.level + 1 < run.dungeon.levelCount ? getLevel(run.dungeon, st.level + 1) : null;
-    if (below) {
-      const land = nearestLanding(below, nc, nr);
-      st.level += 1;
-      st.col = land.col;
-      st.row = land.row;
-      st.elevation = elevationOn(below, land.col, land.row);
-      ensureMonsters(run, st.level);
-      send(player.ws, { t: 'log', text: `You plunge into the chasm and land on level ${st.level + 1}.` });
-    } else {
-      // No level below — scramble back to the level entry rather than die.
-      const e = level.entry;
-      st.col = e.col;
-      st.row = e.row;
-      st.elevation = elevationOn(level, e.col, e.row);
-      send(player.ws, { t: 'log', text: `The pit is bottomless — you barely scramble clear.` });
+  // Hidden traps spring on entry. They sit on floor cells, so they never
+  // coincide with a natural pit/water hazard — resolve them first.
+  const trap = trapAt(trapsOn(run, st.level), nc, nr);
+  if (trap && !trap.sprung) {
+    springTrap(run, player, level, trap);
+  } else {
+    // Natural hazard resolution on entry.
+    const haz = hazardAt(level, nc, nr);
+    if (haz === 'pit') {
+      fallThrough(
+        run,
+        player,
+        level,
+        nc,
+        nr,
+        (n) => `You plunge into the chasm and land on level ${n + 1}.`,
+        `The pit is bottomless — you barely scramble clear.`,
+      );
+    } else if (haz === 'water') {
+      send(player.ws, { t: 'log', text: `You wade through cold water.` });
     }
-  } else if (haz === 'water') {
-    send(player.ws, { t: 'log', text: `You wade through cold water.` });
   }
-  collectLootHere(run, player);
+  if (st.alive) {
+    spotTraps(run, player);
+    collectLootHere(run, player);
+  }
   broadcastState(run);
+}
+
+/** Drop a player through a hole at (nc,nr) — a chasm or a sprung trap door — to
+ *  the floor below, landing on the nearest safe cell. With no floor beneath
+ *  (deepest level), they scramble back to the level entry rather than die. */
+function fallThrough(
+  run: Run,
+  player: Player,
+  level: DungeonLevel,
+  nc: number,
+  nr: number,
+  fellMsg: (landLevel: number) => string,
+  bottomlessMsg: string,
+): void {
+  const st = player.state;
+  const below = st.level + 1 < run.dungeon.levelCount ? getLevel(run.dungeon, st.level + 1) : null;
+  if (below) {
+    const land = nearestLanding(below, nc, nr);
+    st.level += 1;
+    st.col = land.col;
+    st.row = land.row;
+    st.elevation = elevationOn(below, land.col, land.row);
+    ensureMonsters(run, st.level);
+    send(player.ws, { t: 'log', text: fellMsg(st.level) });
+  } else {
+    const e = level.entry;
+    st.col = e.col;
+    st.row = e.row;
+    st.elevation = elevationOn(level, e.col, e.row);
+    send(player.ws, { t: 'log', text: bottomlessMsg });
+  }
+}
+
+/** Trigger a hidden trap the player just stepped on (marks it spent + shown).
+ *  A pit trap drops them a floor; a dart trap deals damage (potentially fatal
+ *  — permadeath, mirroring monster kills). */
+function springTrap(run: Run, player: Player, level: DungeonLevel, trap: Trap): void {
+  const st = player.state;
+  trap.sprung = true;
+  trap.revealed = true;
+  if (trap.kind === 'pit') {
+    fallThrough(
+      run,
+      player,
+      level,
+      trap.col,
+      trap.row,
+      (n) => `A trap door drops open beneath you — you fall to level ${n + 1}!`,
+      `The trap shaft is bottomless — you barely scramble clear.`,
+    );
+    return;
+  }
+  const dmg = dartDamage(st.level);
+  st.hp -= dmg;
+  if (st.hp <= 0) {
+    st.hp = 0;
+    st.alive = false;
+    broadcast(run, { t: 'log', text: `☠ ${st.name} was skewered by a dart trap on level ${st.level + 1}.` });
+  } else {
+    send(player.ws, { t: 'log', text: `Darts hiss from the wall! (−${dmg} HP)` });
+  }
+}
+
+/** Reveal (without springing) any armed traps adjacent to the player's new
+ *  cell — you notice the pressure plate before your weight settles on it. */
+function spotTraps(run: Run, player: Player): void {
+  const st = player.state;
+  for (const t of trapsOn(run, st.level)) {
+    if (t.revealed) continue;
+    if (Math.max(Math.abs(t.col - st.col), Math.abs(t.row - st.row)) <= 1) {
+      t.revealed = true;
+      send(player.ws, { t: 'log', text: `You spot ${t.kind === 'pit' ? 'a trap door' : 'a dart trap'} nearby.` });
+    }
+  }
 }
 
 function cheb(a: { col: number; row: number }, b: { col: number; row: number }): number {
@@ -397,8 +503,10 @@ function handleUsePotion(run: Run, player: Player): void {
 
 // ── Monster AI tick ─────────────────────────────────────────────────────────
 
-/** Advance one run's monsters: chase the nearest living player on their floor
- *  and bite when adjacent. Player HP hitting 0 is permadeath. */
+/** Advance one run's monsters. Each cycles through awareness states
+ *  (sleeping → wandering → hunting) off proximity + line-of-sight to the
+ *  nearest delver: sleepers hold still until noticed, the aware chase and bite.
+ *  Player HP hitting 0 is permadeath. */
 function tickRun(run: Run): void {
   let changed = false;
   const floors = new Set(
@@ -411,6 +519,7 @@ function tickRun(run: Run): void {
     const targets = [...run.players.values()].filter((p) => p.state.alive && p.state.level === floor);
     if (targets.length === 0 || mons.length === 0) continue;
 
+    const occ = (c: number, r: number) => occluderHeight(level, c, r);
     const occupied = new Set(mons.map((m) => m.row * level.cols + m.col));
     for (const m of mons) {
       if (m.hp <= 0) continue;
@@ -424,8 +533,20 @@ function tickRun(run: Run): void {
         }
       }
       if (!best) continue;
+
+      // Update awareness. The boss is a fixed guardian — always hunting.
+      if (!m.boss) {
+        const los = hasLineOfSight(m, best.state, occ, 0, best.state.elevation);
+        const nextState = nextAwareness(m.state, { dist: bd, los, aggro: AGGRO });
+        if (nextState !== m.state) {
+          m.state = nextState;
+          changed = true;
+        }
+      }
+      if (m.state === 'sleeping') continue; // dozing: no move, no bite
+
       if (bd <= 1) {
-        // Attack.
+        // Bite the adjacent delver.
         best.state.hp -= m.damage;
         changed = true;
         if (best.state.hp <= 0 && best.state.alive) {
@@ -434,7 +555,8 @@ function tickRun(run: Run): void {
           broadcast(run, { t: 'log', text: `☠ ${best.state.name} was slain by a ${m.name} on level ${floor + 1}.` });
         }
       } else if (bd <= AGGRO) {
-        // Step toward the target (prefer the diagonal, then a single axis).
+        // Pursue (hunting: seen you; wandering: investigating the disturbance).
+        // Prefer the diagonal, then a single axis.
         const dx = Math.sign(best.state.col - m.col);
         const dy = Math.sign(best.state.row - m.row);
         const tryStep = (cc: number, rr: number): boolean => {

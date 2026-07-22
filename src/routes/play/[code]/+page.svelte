@@ -141,6 +141,7 @@
       players={client.players}
       monsters={client.monsters}
       loot={client.loot}
+      traps={client.traps}
       youId={client.youId}
       tick={client.tick}
       bossDefeated={client.bossDefeated}
@@ -163,6 +164,7 @@
       level={currentLevel}
       players={client.players}
       monsters={client.monsters}
+      traps={client.traps}
       youId={client.youId}
       tick={client.tick}
     />

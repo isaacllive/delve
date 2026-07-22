@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateDungeon, getLevel } from './dungeon.ts';
-import { spawnMonsters } from './monsters.ts';
+import { isUnaware, nextAwareness, spawnMonsters, WAKE_RANGE } from './monsters.ts';
 
 describe('spawnMonsters', () => {
   it('is deterministic for a floor', () => {
@@ -34,5 +34,50 @@ describe('spawnMonsters', () => {
       const dist = Math.abs(m.col - lvl.entry.col) + Math.abs(m.row - lvl.entry.row);
       expect(dist).toBeGreaterThanOrEqual(6);
     }
+  });
+
+  it('ordinary monsters start asleep; the boss starts hunting', () => {
+    const d = generateDungeon('mon-seed', { levelCount: 3 });
+    const mons = spawnMonsters(d.seed, getLevel(d, 2));
+    for (const m of mons) {
+      expect(m.state).toBe(m.boss ? 'hunting' : 'sleeping');
+    }
+  });
+});
+
+const AGGRO = 9;
+
+describe('nextAwareness', () => {
+  it('snaps to hunting when a delver is adjacent, whatever the state', () => {
+    for (const s of ['sleeping', 'wandering', 'hunting'] as const) {
+      expect(nextAwareness(s, { dist: 1, los: false, aggro: AGGRO })).toBe('hunting');
+    }
+  });
+
+  it('wakes a sleeper only within wake range AND with line of sight', () => {
+    expect(nextAwareness('sleeping', { dist: WAKE_RANGE, los: true, aggro: AGGRO })).toBe('hunting');
+    // In range but blocked → stays asleep (sneak-up window).
+    expect(nextAwareness('sleeping', { dist: WAKE_RANGE, los: false, aggro: AGGRO })).toBe('sleeping');
+    // Visible but too far → stays asleep.
+    expect(nextAwareness('sleeping', { dist: WAKE_RANGE + 1, los: true, aggro: AGGRO })).toBe('sleeping');
+  });
+
+  it('promotes a wanderer to hunting once it sees a delver within aggro', () => {
+    expect(nextAwareness('wandering', { dist: AGGRO, los: true, aggro: AGGRO })).toBe('hunting');
+    expect(nextAwareness('wandering', { dist: AGGRO, los: false, aggro: AGGRO })).toBe('wandering');
+    expect(nextAwareness('wandering', { dist: AGGRO + 1, los: true, aggro: AGGRO })).toBe('wandering');
+  });
+
+  it('drops a hunter to wandering when the trail goes cold (beyond aggro)', () => {
+    expect(nextAwareness('hunting', { dist: AGGRO + 1, los: true, aggro: AGGRO })).toBe('wandering');
+    expect(nextAwareness('hunting', { dist: AGGRO, los: false, aggro: AGGRO })).toBe('hunting');
+  });
+});
+
+describe('isUnaware', () => {
+  it('flags everything but hunting as sneak-attackable', () => {
+    expect(isUnaware('sleeping')).toBe(true);
+    expect(isUnaware('wandering')).toBe(true);
+    expect(isUnaware('hunting')).toBe(false);
   });
 });

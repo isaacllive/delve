@@ -3,7 +3,7 @@
 // The server (src/lib/server/gameServer.ts) is authoritative; this client
 // sends intents and mirrors the broadcast state.
 
-import type { ClientMsg, LootState, MonsterState, PlayerState, ServerMsg } from './game/protocol.ts';
+import type { ClientMsg, LootState, MonsterState, PlayerState, ServerMsg, TrapState } from './game/protocol.ts';
 
 export interface ChatLine {
   name: string;
@@ -16,6 +16,8 @@ export class GameClient {
   players = $state<PlayerState[]>([]);
   monsters = $state<MonsterState[]>([]);
   loot = $state<LootState[]>([]);
+  /** Revealed traps (sprung or spotted) on the local delver's floor. */
+  traps = $state<TrapState[]>([]);
   youId = $state<string | null>(null);
   seed = $state<string | null>(null);
   levelCount = $state(0);
@@ -87,6 +89,7 @@ export class GameClient {
         this.players = msg.players;
         this.monsters = msg.monsters;
         this.loot = msg.loot;
+        this.traps = msg.traps;
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
         break;

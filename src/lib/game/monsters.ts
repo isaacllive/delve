@@ -7,6 +7,7 @@ import { cellIndex } from './grid.ts';
 import { makeRng } from './rng.ts';
 import type { DungeonLevel } from './dungeon.ts';
 import { FLOORS_PER_BIOME } from './biomes.ts';
+import type { MonsterAwareness } from './protocol.ts';
 
 export interface MonsterKind {
   id: string;
@@ -61,6 +62,49 @@ export interface Monster {
   hpMax: number;
   damage: number;
   boss: boolean;
+  /** Awareness of the delvers — drives movement + the sneak-attack bonus. */
+  state: MonsterAwareness;
+}
+
+// ── Awareness (stealth) state machine ────────────────────────────────────────
+// Monsters begin asleep and cycle sleeping → wandering → hunting off proximity
+// and line-of-sight to the nearest delver (driven by the server tick). Attacks
+// against an *unaware* monster (sleeping or wandering) land a sneak bonus.
+
+/** How close (Chebyshev cells) a delver must be, with a clear sightline, to
+ *  wake a sleeping monster straight into the hunt. */
+export const WAKE_RANGE = 5;
+
+/** Damage multiplier for striking an unaware (non-hunting) monster. */
+export const SNEAK_MULTIPLIER = 2;
+
+/** A monster is unaware (and thus sneak-attackable) unless it's hunting. */
+export function isUnaware(state: MonsterAwareness): boolean {
+  return state !== 'hunting';
+}
+
+/** Pure awareness transition: given a monster's current state and the nearest
+ *  delver's distance / sightline (plus the aggro radius), return the next
+ *  state. Deterministic and side-effect-free so it can be unit-tested and reused
+ *  by the server tick.
+ *  - Adjacent (dist ≤ 1) always snaps to hunting — you're right on top of it.
+ *  - sleeping → hunting only when a delver is within WAKE_RANGE *and* visible.
+ *  - wandering → hunting once a delver is within aggro *and* visible.
+ *  - hunting → wandering when the nearest delver slips beyond aggro (lost). */
+export function nextAwareness(
+  current: MonsterAwareness,
+  opts: { dist: number; los: boolean; aggro: number },
+): MonsterAwareness {
+  const { dist, los, aggro } = opts;
+  if (dist <= 1) return 'hunting';
+  switch (current) {
+    case 'sleeping':
+      return dist <= WAKE_RANGE && los ? 'hunting' : 'sleeping';
+    case 'wandering':
+      return dist <= aggro && los ? 'hunting' : 'wandering';
+    case 'hunting':
+      return dist > aggro ? 'wandering' : 'hunting';
+  }
 }
 
 function tierFor(depth: number): MonsterKind[] {
@@ -119,5 +163,7 @@ function makeMonster(k: MonsterKind, col: number, row: number, id: string): Mons
     hpMax: k.hp,
     damage: k.damage,
     boss: k.boss ?? false,
+    // Ordinary monsters lie in wait; the boss guards its floor, always alert.
+    state: k.boss ? 'hunting' : 'sleeping',
   };
 }

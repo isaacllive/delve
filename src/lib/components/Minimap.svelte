@@ -5,19 +5,21 @@
   // its heading, teammates and nearby foes are dots, and stairs/exit are marked.
   // Purely presentational — it reads the same broadcast state the 3D view does.
   import type { DungeonLevel } from '$lib/game/dungeon.ts';
-  import type { MonsterState, PlayerState } from '$lib/game/protocol.ts';
+  import type { MonsterState, PlayerState, TrapState } from '$lib/game/protocol.ts';
   import { cellIndex } from '$lib/game/grid.ts';
 
   let {
     level,
     players,
     monsters = [],
+    traps = [],
     youId,
     tick,
   }: {
     level: DungeonLevel;
     players: PlayerState[];
     monsters?: MonsterState[];
+    traps?: TrapState[];
     youId: string | null;
     /** Redraw trigger — the server tick advances as the world moves. */
     tick: number;
@@ -97,10 +99,24 @@
     if (l.boss) dot(l.boss.col, l.boss.row, '#ff5a5a', 4, true);
     if (l.exit) dot(l.exit.col, l.exit.row, '#8affff', 4, true);
 
+    // Revealed traps: hollow ring if still armed, faint dot once sprung.
+    for (const tr of traps) {
+      if (tr.sprung) dot(tr.col, tr.row, '#7a6a4a', 2);
+      else dot(tr.col, tr.row, tr.kind === 'pit' ? '#ff8a3a' : '#ffd23a', 3, true);
+    }
+
     // Nearby foes only (within a hair past torch range) — no wall-hack reveal.
+    // A sleeping foe reads dim; an alert (hunting) one glows brighter red.
     for (const mo of monsters) {
       if (Math.hypot(mo.col - cx, mo.row - cy) > torch * 1.3) continue;
-      dot(mo.col, mo.row, mo.boss ? '#ff3838' : '#ff7a6a', mo.boss ? 4 : 2.4);
+      const color = mo.boss
+        ? '#ff3838'
+        : mo.state === 'hunting'
+          ? '#ff7a6a'
+          : mo.state === 'wandering'
+            ? '#e0a24a'
+            : '#9a6a6a';
+      dot(mo.col, mo.row, color, mo.boss ? 4 : 2.4);
     }
 
     // Teammates, then the local delver on top with a heading tick.
