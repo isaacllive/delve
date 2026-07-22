@@ -12,3 +12,7 @@ vite.config.js.timestamp-*
 # Vendored cloudflared binary for `npm run dev:tunnel` (large, platform-specific
 # — fetched per-machine, see scripts/dev-tunnel.sh).
 /bin/
+
+# Claude Code agent scratch (subagent worktrees, session state) — transient,
+# machine-local, and includes nested git worktrees that must never be committed.
+/.claude/
