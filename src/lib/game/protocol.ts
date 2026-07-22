@@ -44,6 +44,8 @@ export interface PlayerState {
   strength: number;
   /** Remaining poison — 1 HP lost per turn until it decays to 0 (0 = unpoisoned). */
   poison: number;
+  /** Stomach fullness (nutrition). Drains ~1/turn; 0 = starving (see character.ts). */
+  nutrition: number;
   /** Gold carried this expedition (lost on death). */
   gold: number;
   /** Items carried this expedition (lost on death). Rendered by appearance

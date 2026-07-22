@@ -1080,7 +1080,7 @@
       // Floor pickups reveal only their category: gold mound, a potion vial
       // (violet) / scroll (parchment tan), or gear (steel — weapon vs armor
       // tint). True identity/enchant stays hidden until picked up.
-      const itemColor = it.category === 'scroll' ? 0xe8d8a0 : 0xb15aff;
+      const itemColor = it.category === 'scroll' ? 0xe8d8a0 : it.category === 'food' ? 0xb07a3a : 0xb15aff;
       const gearColor = it.gearCategory === 'armor' ? 0x9fb4c8 : 0xd8d8e0;
       const mesh = new THREE.Mesh(
         isGold

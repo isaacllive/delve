@@ -13,7 +13,7 @@ describe('catalog', () => {
     for (const k of ITEM_KINDS) {
       expect(ITEM_KIND_BY_ID[k.id]).toBe(k);
       expect(k.name.length).toBeGreaterThan(0);
-      expect(['potion', 'scroll']).toContain(k.category);
+      expect(['potion', 'scroll', 'food']).toContain(k.category);
       expect(['good', 'bad']).toContain(k.polarity);
     }
   });

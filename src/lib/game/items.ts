@@ -19,7 +19,7 @@
 
 import { makeRng } from './rng.ts';
 
-export type ItemCategory = 'potion' | 'scroll';
+export type ItemCategory = 'potion' | 'scroll' | 'food';
 
 export type ItemKindId =
   // potions
@@ -32,7 +32,9 @@ export type ItemKindId =
   | 'identify'
   | 'teleportation'
   | 'aggravateMonsters'
-  | 'enchanting';
+  | 'enchanting'
+  // food (never disguised — always known)
+  | 'ration';
 
 /** Whether an item is beneficial or harmful to use blind — the axis a future
  *  Scroll/Potion of Detect Magic reveals. */
@@ -118,6 +120,13 @@ export const ITEM_KINDS: readonly ItemKind[] = [
     polarity: 'good',
     desc: 'Infuses a weapon or suit of armor with magic, raising its power and easing its strength requirement.',
   },
+  {
+    id: 'ration',
+    category: 'food',
+    name: 'ration of food',
+    polarity: 'good',
+    desc: 'A sustaining meal. Eat it to stave off starvation on the long descent.',
+  },
 ] as const;
 
 export const ITEM_KIND_BY_ID: Record<ItemKindId, ItemKind> = Object.fromEntries(
@@ -172,8 +181,9 @@ export function makeIdentities(seed: string): RunIdentities {
   let pi = 0;
   let si = 0;
   for (const kind of ITEM_KINDS) {
+    // Food is never disguised — only potions and scrolls play the ID game.
     if (kind.category === 'potion') labelFor[kind.id] = potionLabels[pi++];
-    else labelFor[kind.id] = scrollLabels[si++];
+    else if (kind.category === 'scroll') labelFor[kind.id] = scrollLabels[si++];
   }
   return { labelFor };
 }
@@ -189,7 +199,7 @@ export function displayName(
   discovered: ReadonlySet<ItemKindId>,
 ): string {
   const kind = ITEM_KIND_BY_ID[kindId];
-  if (discovered.has(kindId)) return kind.name;
+  if (kind.category === 'food' || discovered.has(kindId)) return kind.name;
   const label = identities.labelFor[kindId];
   return kind.category === 'potion' ? `${label} potion` : `scroll titled "${label}"`;
 }

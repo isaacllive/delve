@@ -4,6 +4,7 @@
   import { getClass } from '$lib/game/classes.ts';
   import { makeIdentities, displayName } from '$lib/game/items.ts';
   import { gearDisplayName } from '$lib/game/gear.ts';
+  import { hungerLevel } from '$lib/game/character.ts';
   import type { InteractPrompt } from '$lib/game/interactions.ts';
 
   let {
@@ -27,6 +28,15 @@
   const me = $derived(client.me);
   const myClass = $derived(getClass(me?.classId));
   const facing = $derived(me?.facing ?? Math.PI);
+  // Hunger band → label/glyph, shown only once you're no longer well-fed.
+  const HUNGER_UI: Record<string, { glyph: string; label: string }> = {
+    full: { glyph: '', label: '' },
+    hungry: { glyph: '🍖', label: 'Hungry' },
+    weak: { glyph: '🍖', label: 'Weak' },
+    faint: { glyph: '🥴', label: 'Faint' },
+    starving: { glyph: '💀', label: 'Starving' },
+  };
+  const hunger = $derived(HUNGER_UI[hungerLevel(me?.nutrition ?? 2150)]);
   const heading = $derived(compassLabel(facing));
   // The compass rose is oriented to the camera: its "up" is the direction the
   // camera looks, so N/E/S/W and the facing needle read relative to the view.
@@ -79,6 +89,7 @@
         <span class="hp">♥ {me.hp}/{me.hpMax}</span>
         <span class="str" title="Strength — grows only by drinking a Potion of Strength">💪 {me.strength}</span>
         {#if me.poison > 0}<span class="poison" title="Poisoned — losing 1 HP per turn">🤢 {me.poison}</span>{/if}
+        {#if hunger.label}<span class="hunger" title="Eat a ration before you starve">{hunger.glyph} {hunger.label}</span>{/if}
         <span class="purse">🪙 {me.gold}</span>
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}

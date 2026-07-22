@@ -28,6 +28,36 @@ export const POTION_OF_STRENGTH_BONUS = 1;
 /** Max-HP granted by one Potion of Life (permanent; also heals to full). */
 export const POTION_OF_LIFE_HP_BONUS = 10;
 
+// ── Nutrition (the descent clock) ────────────────────────────────────────────
+// Brogue tracks stomach fullness that drains ~1 per turn; let it hit 0 and you
+// starve. This is the pressure that stops you dawdling. Constants from Rogue.h.
+/** A full stomach (starting + max nutrition). */
+export const STOMACH_SIZE = 2150;
+/** Below this you're "hungry" (a nudge to eat soon). */
+export const HUNGER_THRESHOLD = 1350;
+/** Below this you're "weak". */
+export const WEAK_THRESHOLD = 150;
+/** Below this you're "faint" — starvation is imminent. */
+export const FAINT_THRESHOLD = 50;
+/** Nutrition a ration of food restores. */
+export const RATION_NUTRITION = 1800;
+
+export type HungerLevel = 'full' | 'hungry' | 'weak' | 'faint' | 'starving';
+
+/** Classify a nutrition value into a Brogue hunger band. */
+export function hungerLevel(nutrition: number): HungerLevel {
+  if (nutrition <= 0) return 'starving';
+  if (nutrition < FAINT_THRESHOLD) return 'faint';
+  if (nutrition < WEAK_THRESHOLD) return 'weak';
+  if (nutrition < HUNGER_THRESHOLD) return 'hungry';
+  return 'full';
+}
+
+/** Eat food: refill the stomach by `amount`, capped at full. Returns new nutrition. */
+export function eatFood(nutrition: number, amount = RATION_NUTRITION): number {
+  return Math.min(STOMACH_SIZE, nutrition + amount);
+}
+
 /** The mutable vitals every character carries. `PlayerState` is a superset of
  *  this, so the growth helpers below accept a player state directly. */
 export interface Vitals {

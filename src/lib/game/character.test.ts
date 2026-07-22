@@ -4,9 +4,15 @@ import {
   potionOfStrength,
   potionOfLife,
   healBy,
+  hungerLevel,
+  eatFood,
   STARTING_STRENGTH,
   STARTING_MAX_HP,
   POTION_OF_LIFE_HP_BONUS,
+  STOMACH_SIZE,
+  HUNGER_THRESHOLD,
+  WEAK_THRESHOLD,
+  FAINT_THRESHOLD,
 } from './character.ts';
 
 describe('startingVitals (Brogue baseline)', () => {
@@ -46,5 +52,19 @@ describe('healBy', () => {
   it('a Potion of Life fully heals even a badly hurt delver', () => {
     const { hp, hpMax } = potionOfLife(30);
     expect(hp).toBe(hpMax); // full regardless of prior HP
+  });
+});
+
+describe('nutrition (the descent clock)', () => {
+  it('bands nutrition into Brogue hunger levels', () => {
+    expect(hungerLevel(STOMACH_SIZE)).toBe('full');
+    expect(hungerLevel(HUNGER_THRESHOLD - 1)).toBe('hungry');
+    expect(hungerLevel(WEAK_THRESHOLD - 1)).toBe('weak');
+    expect(hungerLevel(FAINT_THRESHOLD - 1)).toBe('faint');
+    expect(hungerLevel(0)).toBe('starving');
+  });
+  it('eating refills toward a full stomach, never past it', () => {
+    expect(eatFood(100)).toBe(100 + 1800);
+    expect(eatFood(STOMACH_SIZE - 10)).toBe(STOMACH_SIZE); // capped
   });
 });

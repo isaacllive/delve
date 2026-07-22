@@ -18,7 +18,16 @@ import {
 import { blocksMove, cellAt, hazardAt, occluderHeight } from '../game/terrain.ts';
 import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
-import { STARTING_STRENGTH, potionOfLife, potionOfStrength } from '../game/character.ts';
+import {
+  FAINT_THRESHOLD,
+  HUNGER_THRESHOLD,
+  STARTING_STRENGTH,
+  STOMACH_SIZE,
+  WEAK_THRESHOLD,
+  eatFood,
+  potionOfLife,
+  potionOfStrength,
+} from '../game/character.ts';
 import {
   isUnaware,
   nextAwareness,
@@ -68,6 +77,7 @@ import { makeRng, type Rng } from '../game/rng.ts';
 import {
   displayName,
   ITEM_KIND_BY_ID,
+  kindsOfCategory,
   makeIdentities,
   type ItemKindId,
   type RunIdentities,
@@ -299,7 +309,8 @@ function joinRun(
       gear: new Map(),
       hazards: new Map(),
       identities: makeIdentities(s),
-      discovered: new Set(),
+      // Food is never part of the ID game — it starts "known".
+      discovered: new Set(kindsOfCategory('food')),
       purchases: 0,
       combatRng: makeRng(`${s}#combat`),
       summonCd: new Map(),
@@ -327,8 +338,9 @@ function joinRun(
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
     poison: 0,
+    nutrition: STOMACH_SIZE,
     gold: 0,
-    inventory: [],
+    inventory: [{ kindId: 'ration', count: 1 }], // Brogue starts you with a ration
     // Brogue starting kit: a dagger + leather armor, both equipped and known.
     gear: [
       makeGear('weapon', 'dagger', `${id}-w0`, 0, true),
@@ -843,6 +855,11 @@ function applyItemEffect(run: Run, player: Player, kindId: ItemKindId): boolean 
       send(player.ws, { t: 'log', text: `Power surges through your muscles. (Strength ${st.strength})` });
       return true;
     }
+    case 'ration': {
+      st.nutrition = eatFood(st.nutrition);
+      send(player.ws, { t: 'log', text: `You eat a ration. Your hunger fades.` });
+      return true;
+    }
     case 'descent': {
       send(player.ws, { t: 'log', text: `The floor dissolves beneath you!` });
       fallThrough(
@@ -1267,6 +1284,31 @@ function maybePoison(run: Run, floor: number, player: Player): void {
   }
 }
 
+/** Hunger tick: nutrition drains 1 per turn; once empty, starvation gnaws 1 HP
+ *  per turn (permadeath if it finishes them). Warns as it crosses thresholds. */
+function maybeStarve(run: Run, floor: number, player: Player): void {
+  const st = player.state;
+  if (!st.alive) return;
+  const before = st.nutrition;
+  st.nutrition = Math.max(0, st.nutrition - 1);
+  // Threshold warnings (only on the turn you cross one).
+  if (before > HUNGER_THRESHOLD && st.nutrition <= HUNGER_THRESHOLD) {
+    send(player.ws, { t: 'log', text: `You are getting hungry.` });
+  } else if (before > WEAK_THRESHOLD && st.nutrition <= WEAK_THRESHOLD) {
+    send(player.ws, { t: 'log', text: `You feel weak with hunger.` });
+  } else if (before > FAINT_THRESHOLD && st.nutrition <= FAINT_THRESHOLD) {
+    send(player.ws, { t: 'log', text: `You are about to faint from starvation!` });
+  }
+  if (st.nutrition <= 0) {
+    st.hp -= 1;
+    if (st.hp <= 0) {
+      st.hp = 0;
+      st.alive = false;
+      broadcast(run, { t: 'log', text: `☠ ${st.name} starved to death on level ${floor + 1}.` });
+    }
+  }
+}
+
 /** Passive regeneration: a delver heals `maxHP` over TURNS_FOR_FULL_REGEN turns
  *  of rest. Accumulated fractionally so small maxHP still heals eventually. */
 function maybeRegen(player: Player): void {
@@ -1302,7 +1344,8 @@ const WORLD_SYSTEMS: WorldSystem[] = [
   ({ run, player, cost }) => takeMonsterTurns(run, player.state.level, cost),
   // Fire spreads and gas diffuses on the delver's floor, burning anything in it.
   ({ run, player }) => stepFloorHazards(run, player.state.level),
-  // Poison saps the delver's health, then they regenerate a sliver.
+  // Hunger drains and poison saps, then the delver regenerates a sliver.
+  ({ run, player }) => maybeStarve(run, player.state.level, player),
   ({ run, player }) => maybePoison(run, player.state.level, player),
   ({ player }) => maybeRegen(player),
 ];
