@@ -100,12 +100,14 @@
       client.wait();
       return;
     }
-    // Number keys 1–9 use the corresponding inventory slot (quaff/read).
+    // Number keys 1–9 use the corresponding inventory slot (quaff/read);
+    // Shift+number THROWS that slot in the facing direction instead.
     if (key >= '1' && key <= '9') {
       const slot = me?.inventory?.[Number(key) - 1];
       if (slot) {
         e.preventDefault();
-        client.useItem(slot.kindId);
+        if (e.shiftKey) client.throwItem(slot.kindId);
+        else client.useItem(slot.kindId);
       }
       return;
     }
@@ -152,6 +154,7 @@
       monsters={client.monsters}
       loot={client.loot}
       traps={client.traps}
+      hazards={client.hazards}
       youId={client.youId}
       tick={client.tick}
       bossDefeated={client.bossDefeated}

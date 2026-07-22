@@ -43,6 +43,16 @@ import {
   weaponDamageRoll,
   type GearInstance,
 } from '../game/gear.ts';
+import {
+  emitGas,
+  fireAt,
+  gasAt,
+  hazardActive,
+  ignite,
+  makeHazardFieldForLevel,
+  stepHazards,
+  type HazardField,
+} from '../game/hazards.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -67,6 +77,7 @@ import {
   MAX_CHAT_LEN,
   MAX_NAME_LEN,
   type ClientMsg,
+  type HazardCell,
   type LootState,
   type MonsterState,
   type PlayerState,
@@ -112,6 +123,8 @@ interface Run {
   traps: Map<number, Trap[]>;
   /** Gear drops per floor index, spawned lazily alongside monsters. */
   gear: Map<number, GearDrop[]>;
+  /** Live fire/gas field per floor index, created on first ignition/emission. */
+  hazards: Map<number, HazardField>;
   /** Per-run item appearances (disguises), derived from the seed. */
   identities: RunIdentities;
   /** Item kinds the party has identified this run (shared knowledge). */
@@ -200,6 +213,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     // Only reveal traps that are sprung or have been spotted — armed, unnoticed
     // traps stay secret so the client can't map them out.
     traps: trapsOn(run, floor).filter((t) => t.revealed).map((t) => toTrapState(t, floor)),
+    hazards: hazardCells(run, floor),
     discovered: [...run.discovered],
     bossDefeated: run.bossDefeated,
   };
@@ -256,6 +270,7 @@ function joinRun(
       loot: new Map(),
       traps: new Map(),
       gear: new Map(),
+      hazards: new Map(),
       identities: makeIdentities(s),
       discovered: new Set(),
       purchases: 0,
@@ -685,6 +700,13 @@ function applyItemEffect(run: Run, player: Player, kindId: ItemKindId): boolean 
       send(player.ws, { t: 'log', text: `Reality folds — you blink to somewhere else on the level.` });
       return true;
     }
+    case 'incineration':
+    case 'caustic': {
+      // Quaffing a throwing potion is a mistake — it goes off in your face.
+      if (st.level >= 0) applyPotionImpact(run, st.level, st.col, st.row, kindId);
+      send(player.ws, { t: 'log', text: `The flask bursts as you drink — a terrible mistake!` });
+      return true;
+    }
     case 'aggravateMonsters': {
       for (const m of monstersOn(run, st.level)) m.state = 'hunting';
       send(player.ws, { t: 'log', text: `A shrill alarm rings out — every monster on the level is now hunting you!` });
@@ -768,11 +790,156 @@ function handleEquip(run: Run, player: Player, instId: string): void {
   endPlayerTurn(run, player);
 }
 
+/** 8-wind step deltas indexed to match compass headings (0 = N, clockwise). */
+const FACING_DELTAS: ReadonlyArray<readonly [number, number]> = [
+  [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
+];
+
+/** Hurl a potion in the delver's facing direction. It flies until it hits a wall
+ *  or a monster (or reaches its range), then shatters — incineration ignites,
+ *  caustic gasses. Only potions can be thrown; the throw consumes it + IDs the
+ *  kind (you watch it break), then the world advances. */
+function handleThrow(run: Run, player: Player, kindId: string): void {
+  const st = player.state;
+  if (!st.alive || st.level < 0 || !isItemKind(kindId)) return;
+  if (ITEM_KIND_BY_ID[kindId].category !== 'potion') return; // only potions fly
+  const stack = st.inventory.find((s) => s.kindId === kindId);
+  if (!stack || stack.count <= 0) return;
+
+  const level = getLevel(run.dungeon, st.level);
+  const [dc, dr] = FACING_DELTAS[Math.round(st.facing / (Math.PI / 4)) & 7];
+  let cc = st.col;
+  let rr = st.row;
+  for (let k = 0; k < THROW_RANGE; k++) {
+    const nc = cc + dc;
+    const nr = rr + dr;
+    if (blocksMove(level, nc, nr)) break; // wall stops the throw at the last cell
+    cc = nc;
+    rr = nr;
+    if (monsterAt(run, st.level, nc, nr)) break; // shatters on the monster
+  }
+
+  applyPotionImpact(run, st.level, cc, rr, kindId);
+  removeFromInventory(st, kindId);
+  const wasUnknown = !run.discovered.has(kindId);
+  run.discovered.add(kindId);
+  send(player.ws, { t: 'log', text: `You hurl the ${ITEM_KIND_BY_ID[kindId].name} — it shatters.` });
+  if (wasUnknown) broadcast(run, { t: 'log', text: `${st.name} learns it was ${ITEM_KIND_BY_ID[kindId].name}.` });
+  endPlayerTurn(run, player);
+}
+
 /** Pass a turn in place (rest): the world advances, you regenerate, and nearby
  *  monsters close in. No-op if dead. */
 function handleWait(run: Run, player: Player): void {
   if (!player.state.alive) return;
   endPlayerTurn(run, player);
+}
+
+// ── Terrain simulation (fire / gas) ──────────────────────────────────────────
+// Fire spreads along grass and gas clouds diffuse each turn (hazards.ts). Fields
+// are created lazily on the first ignition/emission on a floor. Fire and caustic
+// gas damage any actor standing in them; a delver burning to death is permadeath.
+
+const FIRE_DAMAGE_PER_TURN = 8;
+const CAUSTIC_DAMAGE_PER_TURN = 3;
+/** Throw range in cells for a hurled potion. */
+const THROW_RANGE = 7;
+
+/** The hazard field for a floor, created (empty) on first use. */
+function hazardField(run: Run, floor: number): HazardField {
+  let field = run.hazards.get(floor);
+  if (!field) {
+    field = makeHazardFieldForLevel(getLevel(run.dungeon, floor));
+    run.hazards.set(floor, field);
+  }
+  return field;
+}
+
+/** Non-empty fire/gas cells on a floor, for broadcast (empty when quiescent). */
+function hazardCells(run: Run, floor: number): HazardCell[] {
+  const field = run.hazards.get(floor);
+  if (!field || !hazardActive(field)) return [];
+  const out: HazardCell[] = [];
+  for (let row = 0; row < field.rows; row++) {
+    for (let col = 0; col < field.cols; col++) {
+      const fire = fireAt(field, col, row);
+      const gas = gasAt(field, col, row);
+      if (fire > 0 || gas) {
+        out.push({ col, row, fire, gasKind: gas?.kind, gas: gas?.concentration });
+      }
+    }
+  }
+  return out;
+}
+
+/** Damage a delver from fire/gas they stand in; resolves permadeath. */
+function hazardHitPlayer(run: Run, floor: number, player: Player, field: HazardField): void {
+  const st = player.state;
+  if (!st.alive) return;
+  const fire = fireAt(field, st.col, st.row);
+  const gas = gasAt(field, st.col, st.row);
+  let dmg = 0;
+  let cause = '';
+  if (fire > 0) {
+    dmg += Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire));
+    cause = 'the flames';
+  }
+  if (gas && gas.kind === 'caustic') {
+    dmg += Math.max(1, Math.round(CAUSTIC_DAMAGE_PER_TURN * Math.min(1, gas.concentration)));
+    cause = cause ? 'fire and gas' : 'caustic gas';
+  }
+  if (dmg <= 0) return;
+  st.hp -= dmg;
+  if (st.hp <= 0 && st.alive) {
+    st.hp = 0;
+    st.alive = false;
+    broadcast(run, { t: 'log', text: `☠ ${st.name} was consumed by ${cause} on level ${floor + 1}.` });
+  } else {
+    send(player.ws, { t: 'log', text: `You are seared by ${cause}! (−${dmg} HP)` });
+  }
+}
+
+/** Advance a floor's fire/gas one turn and burn everything standing in it. */
+function stepFloorHazards(run: Run, floor: number): void {
+  if (floor < 0) return;
+  const field = run.hazards.get(floor);
+  if (!field || !hazardActive(field)) return;
+  const level = getLevel(run.dungeon, floor);
+  stepHazards(field, level, run.combatRng);
+  for (const p of run.players.values()) {
+    if (p.state.alive && p.state.level === floor) hazardHitPlayer(run, floor, p, field);
+  }
+  for (const m of monstersOn(run, floor)) {
+    if (m.hp <= 0) continue;
+    const fire = fireAt(field, m.col, m.row);
+    const gas = gasAt(field, m.col, m.row);
+    const dmg =
+      (fire > 0 ? Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire)) : 0) +
+      (gas && gas.kind === 'caustic' ? Math.max(1, Math.round(CAUSTIC_DAMAGE_PER_TURN * Math.min(1, gas.concentration))) : 0);
+    if (dmg > 0) {
+      m.hp -= dmg;
+      m.state = 'hunting'; // pain wakes it
+      if (m.hp <= 0) {
+        m.hp = 0;
+        const list = run.monsters.get(floor);
+        if (list) run.monsters.set(floor, list.filter((x) => x !== m));
+      }
+    }
+  }
+}
+
+/** Resolve a potion shattering at (col,row): incineration lights a fireball,
+ *  caustic gas billows out. Neighbours catch too so it fills a small area. */
+function applyPotionImpact(run: Run, floor: number, col: number, row: number, kindId: ItemKindId): void {
+  const field = hazardField(run, floor);
+  const spread: Array<[number, number]> = [
+    [col, row], [col + 1, row], [col - 1, row], [col, row + 1], [col, row - 1],
+  ];
+  if (kindId === 'incineration') {
+    for (const [c, r] of spread) ignite(field, c, r);
+  } else if (kindId === 'caustic') {
+    for (const [c, r] of spread) emitGas(field, c, r, 'caustic', c === col && r === row ? 1 : 0.6);
+  }
 }
 
 // ── Turn engine (energy scheduler) ───────────────────────────────────────────
@@ -909,6 +1076,8 @@ type WorldSystem = (ctx: TurnContext) => void;
 const WORLD_SYSTEMS: WorldSystem[] = [
   // Monsters on the delver's floor act, spending the elapsed time.
   ({ run, player, cost }) => takeMonsterTurns(run, player.state.level, cost),
+  // Fire spreads and gas diffuses on the delver's floor, burning anything in it.
+  ({ run, player }) => stepFloorHazards(run, player.state.level),
   // The delver regenerates a sliver of health.
   ({ player }) => maybeRegen(player),
 ];
@@ -967,6 +1136,7 @@ const INTENTS: IntentRegistry = {
   interact: ({ run, player }) => handleInteract(run, player),
   'use-item': ({ run, player }, msg) => handleUseItem(run, player, msg.kindId),
   equip: ({ run, player }, msg) => handleEquip(run, player, msg.instId),
+  throw: ({ run, player }, msg) => handleThrow(run, player, msg.kindId),
   wait: ({ run, player }) => handleWait(run, player),
   descend: ({ run, player }) => descendFromCamp(run, player),
   // Only the potion shop is stocked; guard the item so an unknown value can't be honoured.

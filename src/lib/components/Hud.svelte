@@ -82,7 +82,7 @@
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}
         </div>
-        <div class="inv" title="Press 1–9 (or click) to use">
+        <div class="inv" title="1–9 (or click) to use · Shift+# to throw">
           {#if items.length}
             {#each items as it (it.kindId)}
               <button class="item" onclick={() => client.useItem(it.kindId)}>

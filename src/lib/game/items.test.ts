@@ -18,7 +18,7 @@ describe('catalog', () => {
     }
   });
   it('splits into potions and scrolls', () => {
-    expect(kindsOfCategory('potion')).toEqual(['life', 'strength', 'descent']);
+    expect(kindsOfCategory('potion')).toEqual(['life', 'strength', 'descent', 'incineration', 'caustic']);
     expect(kindsOfCategory('scroll')).toEqual([
       'identify',
       'teleportation',

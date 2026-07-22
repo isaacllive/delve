@@ -3,7 +3,7 @@
 // The server (src/lib/server/gameServer.ts) is authoritative; this client
 // sends intents and mirrors the broadcast state.
 
-import type { ClientMsg, LootState, MonsterState, PlayerState, ServerMsg, TrapState } from './game/protocol.ts';
+import type { ClientMsg, HazardCell, LootState, MonsterState, PlayerState, ServerMsg, TrapState } from './game/protocol.ts';
 import type { ItemKindId } from './game/items.ts';
 
 export interface ChatLine {
@@ -21,6 +21,8 @@ export class GameClient {
   traps = $state<TrapState[]>([]);
   /** Item kinds the party has identified this run (shared knowledge). */
   discovered = $state<ItemKindId[]>([]);
+  /** Live fire/gas cells on the local delver's floor. */
+  hazards = $state<HazardCell[]>([]);
   youId = $state<string | null>(null);
   seed = $state<string | null>(null);
   levelCount = $state(0);
@@ -94,6 +96,7 @@ export class GameClient {
         this.loot = msg.loot;
         this.traps = msg.traps;
         this.discovered = msg.discovered;
+        this.hazards = msg.hazards;
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
         break;
@@ -136,6 +139,10 @@ export class GameClient {
   /** Equip (or unequip) a carried gear instance by id. */
   equip(instId: string): void {
     this.send({ t: 'equip', instId });
+  }
+  /** Hurl a carried potion in the facing direction. */
+  throwItem(kindId: ItemKindId): void {
+    this.send({ t: 'throw', kindId });
   }
   /** Pass a turn in place (rest). */
   wait(): void {

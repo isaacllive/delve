@@ -26,6 +26,8 @@ export type ItemKindId =
   | 'life'
   | 'strength'
   | 'descent'
+  | 'incineration'
+  | 'caustic'
   // scrolls
   | 'identify'
   | 'teleportation'
@@ -69,6 +71,20 @@ export const ITEM_KINDS: readonly ItemKind[] = [
     name: 'potion of descent',
     polarity: 'bad',
     desc: 'The floor vanishes beneath you — you sink to the next level down.',
+  },
+  {
+    id: 'incineration',
+    category: 'potion',
+    name: 'potion of incineration',
+    polarity: 'bad',
+    desc: 'Bursts into flame on impact — best hurled at foes, ruinous to quaff.',
+  },
+  {
+    id: 'caustic',
+    category: 'potion',
+    name: 'potion of caustic gas',
+    polarity: 'bad',
+    desc: 'Releases a cloud of corrosive gas on impact — throw it, never drink it.',
   },
   {
     id: 'identify',

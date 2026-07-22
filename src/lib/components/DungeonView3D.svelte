@@ -15,7 +15,7 @@
 
   import { onMount, onDestroy } from 'svelte';
   import type { DungeonLevel } from '$lib/game/dungeon.ts';
-  import type { LootState, MonsterAwareness, MonsterState, PlayerState, TrapState } from '$lib/game/protocol.ts';
+  import type { HazardCell, LootState, MonsterAwareness, MonsterState, PlayerState, TrapState } from '$lib/game/protocol.ts';
   import { cellIndex } from '$lib/game/grid.ts';
   import { occluderHeight, WALL_HEIGHT } from '$lib/game/terrain.ts';
   import { hasLineOfSight } from '$lib/game/los.ts';
@@ -32,6 +32,7 @@
     monsters = [],
     loot = [],
     traps = [],
+    hazards = [],
     youId,
     tick,
     bossDefeated = false,
@@ -57,6 +58,7 @@
     monsters?: MonsterState[];
     loot?: LootState[];
     traps?: TrapState[];
+    hazards?: HazardCell[];
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
@@ -275,6 +277,7 @@
       case 'water': return p.water;
       case 'stairsDown': return p.stairsDown;
       case 'stairsUp': return p.stairsUp;
+      case 'grass': return 0x4c7a3a; // flammable groundcover (fuel for fire)
       default: return p.floor;
     }
   }
@@ -1040,6 +1043,31 @@
       mesh.userData.spin = isGold; // spin gold; vials only bob
       avatarGroup.add(mesh);
       lootSpin.push(mesh);
+    }
+
+    // Dynamic terrain hazards: fire (glowing orange discs, taller/brighter with
+    // intensity) and gas clouds (translucent tinted planes). Rebuilt each tick.
+    for (const hz of hazards) {
+      if (hz.fire > 0) {
+        const s = 0.5 + hz.fire * 0.5;
+        const flame = new THREE.Mesh(
+          new THREE.ConeGeometry(0.32 * s, 0.5 + 0.6 * hz.fire, 8),
+          new THREE.MeshBasicMaterial({ color: 0xff7a1a, transparent: true, opacity: 0.85, depthTest: false }),
+        );
+        flame.position.set(hz.col, 0.28, hz.row);
+        flame.renderOrder = 16;
+        avatarGroup.add(flame);
+      }
+      if (hz.gasKind && hz.gas) {
+        const col = hz.gasKind === 'caustic' ? 0x8fbf3a : 0xc07adf;
+        const cloud = new THREE.Mesh(
+          new THREE.SphereGeometry(0.42, 8, 6),
+          new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: Math.min(0.5, 0.2 + hz.gas * 0.4), depthTest: false }),
+        );
+        cloud.position.set(hz.col, 0.35, hz.row);
+        cloud.renderOrder = 15;
+        avatarGroup.add(cloud);
+      }
     }
 
     // Base-camp props: a descent portal + shop stalls.

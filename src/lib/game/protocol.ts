@@ -10,6 +10,7 @@
 
 import type { ItemKindId, ItemCategory } from './items.ts';
 import type { GearInstance, GearCategory } from './gear.ts';
+import type { GasKind } from './hazards.ts';
 
 /** One stack of carried items (a kind + how many). The client renders each by
  *  its per-run appearance (derived from the seed) unless the kind is in the
@@ -92,6 +93,19 @@ export interface TrapState {
   sprung: boolean;
 }
 
+/** A live hazard cell (fire and/or gas) on the viewer's floor. Only non-empty
+ *  cells are sent; the client renders these as dynamic overlays. */
+export interface HazardCell {
+  col: number;
+  row: number;
+  /** Fire intensity in (0, 1], or 0. */
+  fire: number;
+  /** Dominant gas kind at this cell, if any. */
+  gasKind?: GasKind;
+  /** Gas concentration (> 0) when gasKind is present. */
+  gas?: number;
+}
+
 /** A loot pickup on the floor, broadcast for the viewer's floor. The item's true
  *  KIND is not sent — only its category — so a dropped item stays a mystery until
  *  it's in your pack (and even then, disguised until identified). */
@@ -128,6 +142,7 @@ export type ClientMsg =
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
   | { t: 'use-item'; kindId: ItemKindId } // quaff/read a carried item by kind
   | { t: 'equip'; instId: string } // equip/unequip a carried gear instance
+  | { t: 'throw'; kindId: ItemKindId } // hurl a potion in the facing direction
   | { t: 'wait' } // pass a turn in place (rest)
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
@@ -144,6 +159,8 @@ export type ServerMsg =
       monsters: MonsterState[];
       loot: LootState[];
       traps: TrapState[];
+      /** Live fire/gas cells on the viewer's floor (dynamic terrain). */
+      hazards: HazardCell[];
       /** Item kinds the party has identified this run (shared knowledge). */
       discovered: ItemKindId[];
       tick: number;

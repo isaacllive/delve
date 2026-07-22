@@ -190,6 +190,9 @@ function decorate(
   paint('ledge', Math.max(0, Math.round((area / 260) * sb.ledgeMul)), 6, 16);
   paint('pit', Math.max(0, Math.round((area / 380) * sb.pitMul)), 3, 9);
   paint('water', Math.max(0, Math.round((area / 340) * sb.waterMul)), 4, 14);
+  // Flammable grass patches — fuel for the fire simulation (hazards.ts). A few
+  // per floor; they read as floor for movement but catch and spread fire.
+  paint('grass', Math.max(0, Math.round(area / 300)), 8, 20);
 }
 
 // ── uneven cave ceiling (in unison with the floor) ──────────────────────────
