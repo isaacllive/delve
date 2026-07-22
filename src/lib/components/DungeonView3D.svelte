@@ -181,13 +181,33 @@
   // exponential ease at TURN_EASE_PER_SEC (higher = snappier).
   const TURN_EASE_PER_SEC = 14;
   const faceVis = new Map<string, number>();
+
+  // Avatar glide: a move is a discrete cell hop, but snapping the figure (and the
+  // camera that follows it) makes the whole world lurch a cell each step. Instead
+  // we ease each delver's VISUAL position toward its true cell, so stepping
+  // forward scrolls the world smoothly. `posVis` holds the current eased position
+  // keyed by id (surviving the per-move figure rebuild, like `faceVis`); a large
+  // jump (level change, teleport, respawn) or first sight snaps instead of gliding
+  // across the map. Framerate-independent exponential ease at MOVE_EASE_PER_SEC.
+  const MOVE_EASE_PER_SEC = 16;
+  const MOVE_SNAP_DIST = 2.5; // cells: beyond this, jump rather than glide
+  const posVis = new Map<string, { col: number; row: number; elev: number }>();
+
+  // Objects that ride at a delver's ground position, each at a fixed height
+  // offset above the (eased) floor elevation. Re-placed every frame as the
+  // visual position glides, so figure/ring/beam/light travel together.
+  type Part = { obj: import('three').Object3D; yOff: number };
   type Turner = {
     id: string;
     fig: import('three').Object3D | null;
     arrow: import('three').Object3D;
-    col: number;
+    parts: Part[];
+    col: number; // eased VISUAL position (from posVis)
     row: number;
     elevation: number;
+    tCol: number; // true TARGET cell to glide toward
+    tRow: number;
+    tElev: number;
     target: number; // true heading (radians) to ease toward
   };
   let turners: Turner[] = [];
@@ -206,6 +226,12 @@
     const dir = _turnDir.set(Math.sin(vis), 0, -Math.cos(vis));
     t.arrow.quaternion.setFromUnitVectors(_turnUp, dir);
     t.arrow.position.set(t.col + dir.x * 0.5, t.elevation + 0.5, t.row + dir.z * 0.5);
+  }
+
+  // Place all of a delver's ground-tracking parts at its current (eased) visual
+  // position; each part keeps its own fixed height above the floor.
+  function placeParts(t: Turner) {
+    for (const part of t.parts) part.obj.position.set(t.col, t.elevation + part.yOff, t.row);
   }
   let meCell = { col: 0, row: 0, elev: 0 };
   let builtLevelKey = '';
@@ -635,7 +661,6 @@
     }
 
     refreshAvatars(viewers);
-    if (you) followTarget(you);
   }
 
   // ── fade helpers ──────────────────────────────────────────────────────────
@@ -964,6 +989,18 @@
 
     for (const p of viewers) {
       const isYou = p.id === youId;
+      // Seed the eased visual position: resume the prior glide across the figure
+      // rebuild, but snap on first sight or a large jump (level change, teleport,
+      // respawn) so the avatar never drifts across the whole map.
+      const prev = posVis.get(p.id);
+      const far = prev && Math.hypot(prev.col - p.col, prev.row - p.row) > MOVE_SNAP_DIST;
+      const vpos = prev && !far ? prev : { col: p.col, row: p.row, elev: p.elevation };
+      posVis.set(p.id, vpos);
+
+      // Objects that ride at this delver's ground position; each is placed by
+      // placeParts() from the eased position (initially and every frame).
+      const parts: Part[] = [];
+
       // Body: a procedural class figure (knight / ranger / rogue / oracle),
       // yawed to the delver's heading. The ring + arrow + beam below stay
       // depthTest-off locators, and the occluder cutaway clears rock between the
@@ -974,9 +1011,9 @@
         : null;
       const fig = classMini ? figureFor(classMini, p.color) : null;
       if (fig) {
-        fig.position.set(p.col, p.elevation, p.row);
         if (!isYou) fig.scale.multiplyScalar(0.98); // subtle: others read slightly smaller
         avatarGroup.add(fig);
+        parts.push({ obj: fig, yOff: 0 });
       } else {
         // Fallback: the classic through-rock capsule (depthTest off).
         const geo = new THREE.CapsuleGeometry(0.28, 0.5, 4, 8);
@@ -987,9 +1024,9 @@
           opacity: isYou ? 1 : 0.92,
         });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(p.col, p.elevation + 0.55, p.row);
         mesh.renderOrder = 20;
         avatarGroup.add(mesh);
+        parts.push({ obj: mesh, yOff: 0.55 });
       }
 
       // Facing arrow: a flat cone pointing the way the delver is heading. Its
@@ -1001,23 +1038,6 @@
       );
       arrow.renderOrder = 21;
       avatarGroup.add(arrow);
-
-      // Register the live figure + arrow for per-frame turn easing. First sight
-      // of a delver snaps to their heading (no spin-up from an arbitrary 0);
-      // afterwards the stored eased angle carries across the rebuild.
-      const vis = faceVis.get(p.id) ?? p.facing;
-      faceVis.set(p.id, vis);
-      const turner: Turner = {
-        id: p.id,
-        fig,
-        arrow,
-        col: p.col,
-        row: p.row,
-        elevation: p.elevation,
-        target: p.facing,
-      };
-      orientAvatar(turner, vis);
-      turners.push(turner);
 
       // A glowing halo disc on the ground beneath the character — also drawn
       // over the terrain so you can pinpoint the delver even amid tall rock.
@@ -1032,9 +1052,9 @@
         }),
       );
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(p.col, p.elevation + 0.03, p.row);
       ring.renderOrder = 19;
       avatarGroup.add(ring);
+      parts.push({ obj: ring, yOff: 0.03 });
 
       // A soft beacon of light column above your own character.
       if (isYou) {
@@ -1049,33 +1069,53 @@
             blending: THREE.AdditiveBlending,
           }),
         );
-        beam.position.set(p.col, p.elevation + 1.8, p.row);
         beam.renderOrder = 18;
         avatarGroup.add(beam);
+        parts.push({ obj: beam, yOff: 1.8 });
       }
 
       const light = new THREE.PointLight(0xffb060, 1.8, p.torchRadius * 1.5, 1.6);
-      light.position.set(p.col, p.elevation + 0.9, p.row);
       scene.add(light);
       torchLights.push(light);
+      parts.push({ obj: light, yOff: 0.9 });
+
+      // Register the live figure + arrow + parts for per-frame turn/glide easing.
+      // First sight snaps to the true heading (no spin-up from an arbitrary 0);
+      // afterwards the stored eased angle carries across the rebuild.
+      const vis = faceVis.get(p.id) ?? p.facing;
+      faceVis.set(p.id, vis);
+      const turner: Turner = {
+        id: p.id,
+        fig,
+        arrow,
+        parts,
+        col: vpos.col,
+        row: vpos.row,
+        elevation: vpos.elev,
+        tCol: p.col,
+        tRow: p.row,
+        tElev: p.elevation,
+        target: p.facing,
+      };
+      placeParts(turner);
+      orientAvatar(turner, vis);
+      turners.push(turner);
     }
 
-    // Forget the eased heading of anyone no longer present so a rejoining id
-    // starts fresh (snapped) rather than resuming a stale angle.
+    // Forget the eased heading + position of anyone no longer present so a
+    // rejoining id starts fresh (snapped) rather than resuming a stale pose.
     if (faceVis.size > turners.length) {
       const present = new Set(turners.map((t) => t.id));
       for (const id of faceVis.keys()) if (!present.has(id)) faceVis.delete(id);
+      for (const id of posVis.keys()) if (!present.has(id)) posVis.delete(id);
     }
   }
 
   // Aim exactly at the character's body centre (the capsule sits at
-  // elevation + ~0.55) and follow tightly so the delver stays dead-centre.
+  // elevation + ~0.55) and follow tightly so the delver stays dead-centre. The
+  // camera tracks the local delver's EASED position (set each frame in animate),
+  // so the rig glides with the character instead of snapping a cell per step.
   const CHAR_CENTER_Y = 0.55;
-  function followTarget(you: PlayerState) {
-    camTarget.x = you.col;
-    camTarget.y = you.elevation + CHAR_CENTER_Y;
-    camTarget.z = you.row;
-  }
 
   function animate() {
     raf = requestAnimationFrame(animate);
@@ -1092,6 +1132,42 @@
       m.position.y = baseY + Math.sin(now / 400 + m.position.x + m.position.z) * 0.05;
       if (m.userData.spin) m.rotation.y += dt * 1.6;
     }
+    // Glide + turn each delver toward their true cell/heading before the camera
+    // reads the local player's position, so figure and camera move as one.
+    //  · Position: framerate-independent exponential ease so a step scrolls the
+    //    world smoothly instead of snapping a cell; snap once within ~1/100 cell.
+    //  · Heading: shortest angular path, so a turn sweeps through the intervening
+    //    angles (facing away → diagonal → sideways) rather than flipping.
+    if (turners.length) {
+      const kp = 1 - Math.exp(-dt * MOVE_EASE_PER_SEC);
+      const kt = 1 - Math.exp(-dt * TURN_EASE_PER_SEC);
+      for (const t of turners) {
+        const pv = posVis.get(t.id) ?? { col: t.tCol, row: t.tRow, elev: t.tElev };
+        const near = Math.abs(t.tCol - pv.col) < 0.01 && Math.abs(t.tRow - pv.row) < 0.01 && Math.abs(t.tElev - pv.elev) < 0.01;
+        pv.col = near ? t.tCol : pv.col + (t.tCol - pv.col) * kp;
+        pv.row = near ? t.tRow : pv.row + (t.tRow - pv.row) * kp;
+        pv.elev = near ? t.tElev : pv.elev + (t.tElev - pv.elev) * kp;
+        posVis.set(t.id, pv);
+        t.col = pv.col;
+        t.row = pv.row;
+        t.elevation = pv.elev;
+        placeParts(t);
+
+        let vis = faceVis.get(t.id) ?? t.target;
+        const d = Math.atan2(Math.sin(t.target - vis), Math.cos(t.target - vis));
+        vis = Math.abs(d) < 1e-3 ? t.target : vis + d * kt;
+        faceVis.set(t.id, vis);
+        orientAvatar(t, vis);
+
+        // The camera aims at the local delver's eased body centre and follows it.
+        if (t.id === youId) {
+          camTarget.x = pv.col;
+          camTarget.y = pv.elev + CHAR_CENTER_Y;
+          camTarget.z = pv.row;
+        }
+      }
+    }
+
     // Pan the camera position by however much the follow-target moved, so the
     // rig travels with the player while keeping the user's orbit/zoom offset.
     if (camInit) {
@@ -1113,21 +1189,6 @@
       _camSph.theta += d * ALIGN_EASE;
       _camOff.setFromSpherical(_camSph);
       camera.position.copy(controls.target).add(_camOff);
-    }
-
-    // Ease each delver's body + arrow toward their true heading. The shortest
-    // angular path means a turn sweeps through the intervening angles — facing
-    // away then stepping sideways pivots through the diagonal to horizontal, and
-    // a turn toward the camera rotates rather than flipping instantly.
-    if (turners.length) {
-      const k = 1 - Math.exp(-dt * TURN_EASE_PER_SEC);
-      for (const t of turners) {
-        let vis = faceVis.get(t.id) ?? t.target;
-        const d = Math.atan2(Math.sin(t.target - vis), Math.cos(t.target - vis));
-        vis = Math.abs(d) < 1e-3 ? t.target : vis + d * k;
-        faceVis.set(t.id, vis);
-        orientAvatar(t, vis);
-      }
     }
 
     controls.update();
