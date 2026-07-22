@@ -44,20 +44,24 @@ all merged to this branch (382 tests, 0 type errors). See
       enchant economy, combat derivations) + `scroll of enchanting` +
       `spawnGear`. 20 tests.
 
-### Wave 2 (serial integration) — TODO
-Wire the Wave-1 modules through the Phase-0 seams (intent registry + world
-systems). Each is an additive integration:
-- [ ] **Terrain**: register a `stepHazards` world system; place `grass` in gen;
-      damage/afflict actors standing in fire/gas; broadcast + render fire/gas
-      (renderer) and burnt grass→floor.
-- [ ] **Gear**: widen `LootState.kind` to include gear; call `spawnGear` in
-      `ensureMonsters`; equip intent + equipment on `PlayerState`; route
-      player/monster combat through `gear.equippedAccuracy/Defense/weaponDamageRoll`;
-      Scroll of Enchanting + gear identify effects; HUD equip UI; Smith sells gear.
-- [ ] **Monster abilities**: resolve the flags in `actMonster`/combat
-      (split/steal/corrode/ranged/summon/explode/poison); client ability tint.
-- [ ] **Room gen**: adopt `generateRoomLevel` as the generator for architectural
-      biomes in `dungeon.ts` (layer on lights/palette/ceilings).
+### Wave 2 (serial integration) — LANDED
+Wired the Wave-1 modules through the Phase-0 seams (intent registry + world
+systems). 382 tests, 0 type errors throughout.
+- [x] **Gear**: `PlayerState` carries gear + equipped weapon/armor; start with a
+      dagger + leather; `spawnGear` drops per floor (broadcast as `gear` loot,
+      picked up); combat routes through `gear.ts` (accuracy/defense/damage/dagger
+      sneak ×5); Scroll of Enchanting enchants equipped gear, Identify reveals
+      gear enchant; `equip` intent; HUD gear list; 3D floor-gear markers.
+- [x] **Terrain**: grass fuel placed in gen; `stepHazards` world system spreads
+      fire/gas each turn and burns actors; fire/gas broadcast + rendered (flame
+      cones / gas clouds); `throw` intent hurls incineration/caustic potions
+      (facing-based) as the ignition source (Shift+# to throw).
+- [x] **Monster abilities**: resolved splitsOnHit, explodesOnDeath, corrodesWeapon,
+      ranged, immobile, flees, flies, stealsAndFlees in `actMonster`/combat.
+  - [ ] Deferred (need new status/spawn systems): **aquatic**, **summons**,
+        **poisons**; client ability tint (glyph).
+- [x] **Room gen**: `generateRoomLevel` now carves Ruins + Ancient City;
+      other biomes stay caves; shared decoration layers on either.
 
 ### Refocus progress
 - [x] **Turn/energy scheduler** — pure `src/lib/game/energy.ts` (100/50/200-tick
