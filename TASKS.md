@@ -2,6 +2,55 @@
 
 Living checklist of changes. Newest intent at top; tick items as they land.
 
+## 🎯 PROJECT REFOCUS — faithful Brogue recreation
+
+Delve is being refocused into a **faithful recreation of Brogue** (Brian
+Walker's coffee-break roguelike), keeping the **voxel 3D visuals** as the
+"updated look". Two governing decisions are locked in:
+
+- **Turn-based, solo-first.** We are moving off the real-time co-op wall-clock
+  tick to a **turn/energy scheduler** (Brogue timing: 100-tick turns, haste 50,
+  slow 200). Real-time co-op is **shelved as a future extension** — the base
+  game comes first.
+- **Faithful Brogue scale & numbers.** 26 depths, a **Strength** stat, and
+  item/monster/combat tables ported from BrogueCE (`GlobalsBrogue.c`,
+  `PowerTables.c`, `Combat.c`). Power comes from **items + positioning, never
+  XP**. The 100-floor / 5-biome expansion is retired for now (a possible
+  post-recreation extension).
+
+Analysis + roadmap: **`docs/brogue-fidelity.md`** (pillar scorecard, phased
+plan) and `docs/brogue-features.md` (mechanic selection). Roadmap phases:
+
+1. **Character model & item spine** — Strength; item/identify/enchant system;
+   Brogue combat math. ← *in progress*
+2. **Living dungeon** — terrain simulation (fire/gas), monster geometry +
+   hordes + OOD + mutations, scent/stealth.
+3. **Authored texture** — vault pockets + altars, nutrition clock, ascension
+   victory lap (amulet → climb out).
+4. **(Stretch)** room-accretion generator + blueprint machines.
+
+### Refocus progress
+- [x] **Turn/energy scheduler** — pure `src/lib/game/energy.ts` (100/50/200-tick
+      turns, per-actor speeds, `nextToAct`/`runUntilPlayer`) + tests. *(Not yet
+      wired into `gameServer.ts` — that swaps the real-time `tickRun` heartbeat
+      for a turn loop; next integration step.)*
+- [x] **Brogue combat math** — pure `src/lib/game/combat.ts` (hit =
+      `accuracy×0.987^defense`, `1.065^netEnchant` accuracy/damage, strength
+      modifier +0.25/−2.5, sneak ×3 / dagger ×5, `randClump` damage) + tests.
+      Numbers ported verbatim from BrogueCE.
+- [ ] **Wire turn loop into `gameServer.ts`** — player action advances the
+      clock; monsters act via `runUntilPlayer`; retire the wall-clock interval.
+- [ ] **Strength stat + HP/STR-from-items only** on the character model.
+- [ ] **Item system** (`items.ts`): inventory, `use-item` intent, first
+      potions/scrolls; per-run identification table; enchant on gear.
+- [ ] **26-depth structure + amulet win** replacing the 100-floor boss/portal.
+
+*(The items below predate the refocus and are largely on hold; several — stealth
+states, persistent fog, traps, permadeath, no-XP — already align with Brogue and
+carry forward.)*
+
+---
+
 ## In progress (this session)
 
 - [ ] **Debug view: terrain always visible (lighting-only).** Don't hide
