@@ -1,14 +1,11 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { randomSeed } from '$lib/game/rng.ts';
-  import { CLASSES, randomClassId, roleLabel } from '$lib/game/classes.ts';
 
   let screen = $state<'title' | 'create'>('title');
   let name = $state('');
   let code = $state('');
   let seed = $state('');
-  let classId = $state(CLASSES[0].id);
-  const chosen = $derived(CLASSES.find((c) => c.id === classId) ?? CLASSES[0]);
 
   // Deterministic ember decoration (index-based so SSR + client hydration match).
   const embers = Array.from({ length: 14 }, (_, i) => ({
@@ -25,18 +22,9 @@
     return s;
   }
 
-  function surprise() {
-    classId = randomClassId();
-    if (!name.trim()) name = randomName();
-  }
-  function randomName(): string {
-    const a = ['Bram', 'Sela', 'Tor', 'Vex', 'Rune', 'Kael', 'Mira', 'Dusk', 'Fenn', 'Wren'];
-    return a[Math.floor(Math.random() * a.length)];
-  }
-
   function play(joinCode: string) {
     const n = name.trim() || 'Delver';
-    const params = new URLSearchParams({ name: n, class: classId });
+    const params = new URLSearchParams({ name: n });
     if (seed.trim()) params.set('seed', seed.trim());
     goto(`/play/${joinCode.toUpperCase()}?${params.toString()}`);
   }
@@ -76,31 +64,11 @@
 
       <label>Your name<input bind:value={name} placeholder="Delver" maxlength="24" /></label>
 
-    <div class="class-head">
-      <span>Choose your delver</span>
-      <button class="ghost" onclick={surprise}>🎲 Surprise me</button>
-    </div>
-    <div class="classes">
-      {#each CLASSES as c (c.id)}
-        <button
-          class="class-card"
-          class:sel={c.id === classId}
-          style="--accent:{c.accent}"
-          onclick={() => (classId = c.id)}
-        >
-          <b>{c.name}</b>
-          <em>{roleLabel(c.role)}</em>
-        </button>
-      {/each}
-    </div>
-    <div class="class-detail" style="--accent:{chosen.accent}">
-      <p class="blurb">{chosen.blurb}</p>
-      <div class="stats"><span>♥ {chosen.hp} HP</span><span>👁 {chosen.torchRadius} vision</span></div>
-      <ul>
-        {#each chosen.abilities as ab (ab.name)}
-          <li><b>{ab.name}</b> — {ab.desc}</li>
-        {/each}
-      </ul>
+    <div class="adventurer">
+      <b>Adventurer</b>
+      <p>A lone delver — Brogue-style. No classes: your power is the gear you find
+        and how you wield it. You start with a dagger, leather armor, 30 HP, and
+        Strength 12.</p>
     </div>
 
     <div class="row">
@@ -289,81 +257,23 @@
     outline: none;
     border-color: #ffb04788;
   }
-  .class-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-    color: #9aa0aa;
-    font-size: 12px;
-  }
-  .ghost {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    color: #cfd3db;
-    padding: 5px 9px;
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .classes {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 7px;
-    margin-bottom: 10px;
-  }
-  .class-card {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 9px 4px;
-    background: #191c24;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 9px;
-    cursor: pointer;
-    color: #cfd3db;
-  }
-  .class-card b {
-    color: var(--accent);
-    font-size: 13px;
-  }
-  .class-card em {
-    font-style: normal;
-    font-size: 10px;
-    color: #8a8f99;
-  }
-  .class-card.sel {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent) inset;
-  }
-  .class-detail {
+  .adventurer {
     background: rgba(0, 0, 0, 0.28);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid #ffcf5a;
     border-radius: 9px;
     padding: 11px 13px;
     margin-bottom: 14px;
   }
-  .class-detail .blurb {
-    margin: 0 0 8px;
-    color: #dfe2e8;
+  .adventurer b {
+    color: #ffcf5a;
     font-size: 13px;
   }
-  .class-detail .stats {
-    display: flex;
-    gap: 14px;
-    color: #9aa0aa;
-    font-size: 12px;
-    margin-bottom: 8px;
-  }
-  .class-detail ul {
-    margin: 0;
-    padding-left: 16px;
+  .adventurer p {
+    margin: 6px 0 0;
     color: #b6bbc4;
     font-size: 12px;
     line-height: 1.5;
-  }
-  .class-detail ul b {
-    color: #e6e8ec;
   }
   .row {
     margin: 6px 0 12px;
