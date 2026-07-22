@@ -57,9 +57,10 @@ systems). 382 tests, 0 type errors throughout.
       cones / gas clouds); `throw` intent hurls incineration/caustic potions
       (facing-based) as the ignition source (Shift+# to throw).
 - [x] **Monster abilities**: resolved splitsOnHit, explodesOnDeath, corrodesWeapon,
-      ranged, immobile, flees, flies, stealsAndFlees in `actMonster`/combat.
-  - [ ] Deferred (need new status/spawn systems): **aquatic**, **summons**,
-        **poisons**; client ability tint (glyph).
+      ranged, immobile, flees, flies, stealsAndFlees in `actMonster`/combat, then
+      **aquatic** (water-confined + hidden ambush), **summons** (cooldown thralls),
+      **poisons** (per-turn HP drain world system) + **client ability tint** (glyph)
+      and aquatic concealment. All 11 flags now resolved.
 - [x] **Room gen**: `generateRoomLevel` now carves Ruins + Ancient City;
       other biomes stay caves; shared decoration layers on either.
 
@@ -91,9 +92,12 @@ systems). 382 tests, 0 type errors throughout.
       initialized to 12 for every delver, shown in the HUD. *(The Potion of
       Life/Strength pickups that TRIGGER the growth arrive with the item system;
       starting HP is still class-driven — see the classless note below.)*
-  - [ ] **Retire classes → classless STR 12 / HP 30 for all** (Brogue is
-        classless; classes become a possible future extension). Touches lobby /
-        join flow / HUD — deferred, out of scope for the stat change.
+  - [x] **Retire classes → classless Adventurer** (Brogue is classless). One
+        Adventurer (HP 30, STR 12); lobby class picker removed; `classId`
+        plumbing kept inert. *(A future pass can delete the field entirely.)*
+- [x] **Live playtest** — ran the app (dev server + Playwright): lobby → camp
+      → dungeon, ws connectivity, turn-based movement, gear equipped, HUD, and
+      3D render all verified with no runtime errors.
 - [x] **Item system spine** (`items.ts`): pure catalog + per-run identification
       (potions disguised as colours, scrolls as gibberish titles, shuffled from
       the seed) + `displayName`. Inventory on `PlayerState`, `use-item` intent,
