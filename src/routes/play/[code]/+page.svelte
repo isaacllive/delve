@@ -78,6 +78,16 @@
     travel = null;
   }
 
+  // Remaining route steps from the delver's current cell (drives the on-floor
+  // trail). Derived off `me` so it shrinks as each step is walked.
+  const travelPath = $derived.by(() => {
+    const t = travel;
+    const m = client.me;
+    if (!t || !m) return [];
+    const idx = t.path.findIndex((s) => s.col === m.col && s.row === m.row);
+    return idx >= 0 ? t.path.slice(idx + 1) : t.path;
+  });
+
   /** Revealed-but-armed traps on the current floor, as cell indices to avoid. */
   function armedTrapCells(): Set<number> {
     const s = new Set<number>();
@@ -273,6 +283,7 @@
       youId={client.youId}
       tick={client.tick}
       bossDefeated={client.bossDefeated}
+      travelPath={travelPath}
       onYaw={(y) => (cameraYaw = y)}
       onPickCell={(c, r) => beginTravelTo(c, r)}
       onExplored={(depth, ex) => { explored = ex; exploredDepth = depth; }}

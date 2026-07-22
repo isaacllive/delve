@@ -35,6 +35,7 @@
     youId,
     tick,
     bossDefeated = false,
+    travelPath = [],
     onYaw,
     onPickCell,
     onExplored,
@@ -62,6 +63,9 @@
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
+    /** Remaining steps of an in-progress auto-travel route, drawn as a trail on
+     *  the floor (last step = destination). Empty when not travelling. */
+    travelPath?: { col: number; row: number }[];
     /** Reports the camera's azimuth (radians) whenever it changes, so the HUD
      *  compass can orient relative to the current view. */
     onYaw?: (yaw: number) => void;
@@ -182,6 +186,14 @@
   const OCC_R_IN = 0.42;
   const OCC_R_OUT = 0.66;
   const OCC_SCAN = 24; // cells around the player to consider
+  // Ground/wall oculus: nearby wall blocks in a screen-disc around the delver
+  // fade too, so you see the SPACE around the character — not just a slit to
+  // them. A TIGHTER disc than the roof (walls surround you, so a wide radius
+  // would dissolve the whole view) plus a height band + small scan for perf.
+  const GROUND_OCC_SCAN = 9;
+  const GROUND_OCC_RISE = 4; // clear wall blocks up to this height above the floor
+  const GROUND_R_IN = 0.16; // NDC radius fully cleared around the delver
+  const GROUND_R_OUT = 0.3; // NDC radius the wall fade eases back to solid
 
   // Behind-the-character follow camera. After a move, the camera azimuth eases
   // to sit behind the player (facing their heading); when idle the user can
@@ -1050,6 +1062,26 @@
       avatarGroup.add(ring);
     }
 
+    // Auto-travel trail: a line of dots along the planned route, with a ring on
+    // the destination, so a click-to-move shows exactly where you're headed.
+    for (let i = 0; i < travelPath.length; i++) {
+      const p = travelPath[i];
+      const isDest = i === travelPath.length - 1;
+      const mk = new THREE.Mesh(
+        isDest ? new THREE.TorusGeometry(0.3, 0.055, 8, 20) : new THREE.CircleGeometry(0.11, 12),
+        new THREE.MeshBasicMaterial({
+          color: 0x7fe0ff,
+          depthTest: false,
+          transparent: true,
+          opacity: isDest ? 0.95 : 0.45,
+        }),
+      );
+      mk.rotation.x = -Math.PI / 2;
+      mk.position.set(p.col, 0.07, p.row);
+      mk.renderOrder = 12;
+      avatarGroup.add(mk);
+    }
+
     // Loot: gold piles (tapered coin mounds) and potions (standing vials). Gold
     // used to be a flat 0.08-thick disc lying on the floor, which foreshortened
     // to an invisible sliver at the game's low camera angle — a mound stands
@@ -1316,13 +1348,21 @@
   const occTargetCeil = new Map<number, number>();
   /** Screen-space fade weight for a world point: 1 inside the clear circle,
    *  ramping to 0 at the ring's outer edge, 0 beyond. */
-  function circleWeight(x: number, y: number, z: number, ccx: number, ccy: number): number {
+  function circleWeight(
+    x: number,
+    y: number,
+    z: number,
+    ccx: number,
+    ccy: number,
+    rIn = OCC_R_IN,
+    rOut = OCC_R_OUT,
+  ): number {
     _v3.set(x, y, z).project(camera!);
     if (_v3.z > 1) return 0; // behind the camera
     const nd = Math.hypot(_v3.x - ccx, _v3.y - ccy);
-    if (nd <= OCC_R_IN) return 1;
-    if (nd >= OCC_R_OUT) return 0;
-    return (OCC_R_OUT - nd) / (OCC_R_OUT - OCC_R_IN);
+    if (nd <= rIn) return 1;
+    if (nd >= rOut) return 0;
+    return (rOut - nd) / (rOut - rIn);
   }
   /** Index of the ground block in `cellIdx` whose vertical span contains world-Y
    *  `y` (blocks run bottom→top). Clamps to the topmost block above the column. */
@@ -1413,6 +1453,34 @@
         if (w > 0) bump(occTargetCeil, idx, w);
       }
     }
+
+    // ── Ground/wall oculus: fade nearby WALL blocks that fall inside the same
+    // screen-disc around the delver, so the pocket of floor AROUND the character
+    // opens up — not merely a tunnel to them. Only blocks in front of the delver
+    // (closer to the camera, so no void is revealed) and within a low height band
+    // are considered; the block-level granularity carves a rounded hollow.
+    const gc0 = Math.max(0, meCell.col - GROUND_OCC_SCAN);
+    const gc1 = Math.min(l.cols - 1, meCell.col + GROUND_OCC_SCAN);
+    const gr0 = Math.max(0, meCell.row - GROUND_OCC_SCAN);
+    const gr1 = Math.min(l.rows - 1, meCell.row + GROUND_OCC_SCAN);
+    const yTop = meCell.elev + GROUND_OCC_RISE;
+    for (let r = gr0; r <= gr1; r++) {
+      for (let c = gc0; c <= gc1; c++) {
+        const idx = cellIndex(c, r, l.cols);
+        if (l.cells[idx].kind !== 'wall') continue;
+        if (c === meCell.col && r === meCell.row) continue;
+        const s = cellBlockStart[idx];
+        const n = cellBlockCount[idx];
+        for (let k = 0; k < n; k++) {
+          const b = s + k;
+          const by = blockY[b];
+          if (by > yTop) break; // blocks are bottom→top; nothing above matters
+          if (_v3.set(c, by, r).distanceTo(camPos) >= charDist + 0.5) continue;
+          const w = circleWeight(c, by, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
+          if (w > 0) bump(occTarget, b, w);
+        }
+      }
+    }
     // Ease flagged blocks toward faded, previously-flagged back toward solid.
     // occActive / occTarget key individual ground BLOCK instances now.
     const step = Math.min(1, dt * OCC_SPEED);
@@ -1484,6 +1552,7 @@
     // which flips after the async THREE init completes).
     void tick;
     void ready;
+    void travelPath; // re-render the trail the instant a route is set/updated
     const l = level;
     const ps = players;
     if (!ready || !THREE || !scene) return;
