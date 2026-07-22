@@ -23,6 +23,16 @@ import {
   type TerrainKind,
 } from './terrain.ts';
 import { makeRng, type Rng } from './rng.ts';
+import { generateRoomLevel } from './roomgen.ts';
+
+// Architectural biomes are carved with the room-accretion generator (roomgen.ts)
+// instead of cellular-automata caves — Ruins and the Ancient City read as built
+// spaces, not caverns. Other biomes stay caves. The bottom (boss) floor always
+// uses caves so its far-cell boss/exit placement is unchanged.
+const ROOM_BIOMES = new Set(['Ruins', 'Ancient City']);
+function usesRoomGen(depth: number, isLast: boolean): boolean {
+  return !isLast && ROOM_BIOMES.has(biomeForDepth(depth).name);
+}
 
 export interface DungeonLevel extends Level {
   lights: LightSource[];
@@ -285,28 +295,49 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
   const isLast = depth === levelCount - 1;
   const sb = subBiomeForDepth(seed, depth);
   const biome = biomeForDepth(depth).name;
-  const rng = makeRng(`${seed}#${depth}`);
 
-  // 1. Random fill (border always rock).
-  let map: boolean[] = new Array(cols * rows);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      map[r * cols + c] =
-        c === 0 || r === 0 || c === cols - 1 || r === rows - 1 ? true : rng.chance(sb.fillProb);
+  // Carve the level — architectural biomes use room accretion, the rest use
+  // cellular-automata caves. Both produce the same `cells`/`region`/entry/down
+  // shape; the decoration + fixtures below are shared. `rng` drives that shared
+  // decoration (a fresh stream for the room path, whose carve uses its own seed).
+  let cells: TerrainCell[];
+  let region: Set<number>;
+  let entryIdx: number;
+  let downIdx: number;
+  let rng: Rng;
+
+  if (usesRoomGen(depth, isLast)) {
+    const rl = generateRoomLevel(seed, depth, { cols, rows, levelCount });
+    cells = rl.cells;
+    region = new Set<number>();
+    for (let i = 0; i < cells.length; i++) if (cells[i].kind !== 'wall') region.add(i);
+    const up = rl.stairsUp ?? rl.entry;
+    entryIdx = cellIndex(up.col, up.row, cols);
+    downIdx = rl.stairsDown ? cellIndex(rl.stairsDown.col, rl.stairsDown.row, cols) : entryIdx;
+    rng = makeRng(`${seed}#${depth}#decor`);
+  } else {
+    rng = makeRng(`${seed}#${depth}`);
+    // Random fill (border always rock) → smooth → keep the largest region.
+    let map: boolean[] = new Array(cols * rows);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        map[r * cols + c] =
+          c === 0 || r === 0 || c === cols - 1 || r === rows - 1 ? true : rng.chance(sb.fillProb);
+      }
     }
+    for (let s = 0; s < sb.smoothSteps; s++) map = smooth(map, cols, rows);
+    region = largestRegion(map, cols, rows);
+    cells = map.map((w) => makeCell(w ? 'wall' : 'floor'));
+    // Entry + far-apart down-stairs.
+    const caveOpen = [...region];
+    entryIdx = caveOpen[rng.int(0, caveOpen.length - 1)];
+    const dist = bfsDistances(region, cols, entryIdx);
+    downIdx = entryIdx;
+    let far = -1;
+    for (const [idx, d] of dist) if (d > far) ((far = d), (downIdx = idx));
   }
-  for (let s = 0; s < sb.smoothSteps; s++) map = smooth(map, cols, rows);
-  const region = largestRegion(map, cols, rows);
 
-  const cells: TerrainCell[] = map.map((w) => makeCell(w ? 'wall' : 'floor'));
-
-  // Entry + stairs (far apart), reserved from decoration.
   const openList = [...region];
-  const entryIdx = openList[rng.int(0, openList.length - 1)];
-  const dist = bfsDistances(region, cols, entryIdx);
-  let downIdx = entryIdx;
-  let far = -1;
-  for (const [idx, d] of dist) if (d > far) ((far = d), (downIdx = idx));
   const entry = { col: entryIdx % cols, row: Math.floor(entryIdx / cols) };
   // Every floor's up-stair returns to the floor above; floor 0's returns to the
   // base camp (so you can retreat and bank the expedition).
