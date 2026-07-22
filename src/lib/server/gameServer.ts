@@ -27,20 +27,31 @@ import {
 } from '../game/monsters.ts';
 import { runUntilPlayer, TICKS_PER_TURN, type Scheduled } from '../game/energy.ts';
 import {
-  netEnchant,
   rollDamage,
   rollHit,
   sneakMultiplier,
-  weaponAccuracy,
   type DamageRange,
 } from '../game/combat.ts';
+import {
+  enchantItem,
+  equippedAccuracy,
+  equippedDefense,
+  gearDisplayName,
+  isDaggerEquipped,
+  makeGear,
+  revealEnchant,
+  weaponDamageRoll,
+  type GearInstance,
+} from '../game/gear.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
   monsterReward,
   POTION_COST,
   randomPotionKind,
+  spawnGear,
   spawnLoot,
+  type GearDrop,
   type Loot,
 } from '../game/loot.ts';
 import { makeRng, type Rng } from '../game/rng.ts';
@@ -66,13 +77,10 @@ import {
 /** Aggro range (cells) within which a monster chases a player. */
 const AGGRO = 9;
 
-// ── combat model (Brogue via combat.ts) ──────────────────────────────────────
-// Unarmed, the delver's "weapon" has a strength requirement equal to the
-// starting strength, so a fresh delver is neutral (net enchant 0 → accuracy 100)
-// and every Potion of Strength thereafter is a small, real edge. Player defense
-// is 0 until armor exists, so monsters land blows at their raw accuracy for now.
-const UNARMED_STR_REQ = STARTING_STRENGTH;
-const PLAYER_DEFENSE = 0;
+// ── combat model (Brogue via combat.ts + gear.ts) ────────────────────────────
+// Player accuracy/defense/damage come from equipped gear (gear.ts derivations,
+// which fold in Strength + enchant): the equipped weapon drives the hit roll +
+// damage (fists when unarmed), the equipped armor drives the delver's defense.
 /** Turns of continuous rest for a full-health regeneration (Brogue baseline). */
 const TURNS_FOR_FULL_REGEN = 300;
 
@@ -102,6 +110,8 @@ interface Run {
   loot: Map<number, Loot[]>;
   /** Hidden traps per floor index, spawned lazily alongside monsters. */
   traps: Map<number, Trap[]>;
+  /** Gear drops per floor index, spawned lazily alongside monsters. */
+  gear: Map<number, GearDrop[]>;
   /** Per-run item appearances (disguises), derived from the seed. */
   identities: RunIdentities;
   /** Item kinds the party has identified this run (shared knowledge). */
@@ -137,6 +147,18 @@ function lootOn(run: Run, floor: number): Loot[] {
 function trapsOn(run: Run, floor: number): Trap[] {
   return run.traps.get(floor) ?? [];
 }
+function gearOn(run: Run, floor: number): GearDrop[] {
+  return run.gear.get(floor) ?? [];
+}
+
+/** The player's equipped weapon instance (null = unarmed/fists). */
+function equippedWeapon(st: PlayerState): GearInstance | null {
+  return st.gear.find((g) => g.instId === st.equippedWeapon) ?? null;
+}
+/** The player's equipped armor instance (null = unarmored). */
+function equippedArmor(st: PlayerState): GearInstance | null {
+  return st.gear.find((g) => g.instId === st.equippedArmor) ?? null;
+}
 
 /** Spawn a floor's monsters + loot + traps on first visit (never for the
  *  camp). */
@@ -146,6 +168,7 @@ function ensureMonsters(run: Run, floor: number): void {
   run.monsters.set(floor, spawnMonsters(run.seed, level));
   run.loot.set(floor, spawnLoot(run.seed, level));
   run.traps.set(floor, spawnTraps(run.seed, level));
+  run.gear.set(floor, spawnGear(run.seed, level));
 }
 
 function toMonsterState(m: Monster, floor: number): MonsterState {
@@ -153,6 +176,9 @@ function toMonsterState(m: Monster, floor: number): MonsterState {
 }
 function toLootState(l: Loot, floor: number): LootState {
   return { id: l.id, kind: l.kind, category: l.category, col: l.col, row: l.row, level: floor };
+}
+function gearToLootState(g: GearDrop, floor: number): LootState {
+  return { id: g.id, kind: 'gear', gearCategory: g.gearCategory, col: g.col, row: g.row, level: floor };
 }
 function toTrapState(t: Trap, floor: number): TrapState {
   return { id: t.id, kind: t.kind, col: t.col, row: t.row, level: floor, sprung: t.sprung };
@@ -167,7 +193,10 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     tick: run.tick,
     players: [...run.players.values()].map((p) => p.state),
     monsters: monstersOn(run, floor).map((m) => toMonsterState(m, floor)),
-    loot: lootOn(run, floor).map((l) => toLootState(l, floor)),
+    loot: [
+      ...lootOn(run, floor).map((l) => toLootState(l, floor)),
+      ...gearOn(run, floor).map((g) => gearToLootState(g, floor)),
+    ],
     // Only reveal traps that are sprung or have been spotted — armed, unnoticed
     // traps stay secret so the client can't map them out.
     traps: trapsOn(run, floor).filter((t) => t.revealed).map((t) => toTrapState(t, floor)),
@@ -226,6 +255,7 @@ function joinRun(
       monsters: new Map(),
       loot: new Map(),
       traps: new Map(),
+      gear: new Map(),
       identities: makeIdentities(s),
       discovered: new Set(),
       purchases: 0,
@@ -255,6 +285,13 @@ function joinRun(
     strength: STARTING_STRENGTH,
     gold: 0,
     inventory: [],
+    // Brogue starting kit: a dagger + leather armor, both equipped and known.
+    gear: [
+      makeGear('weapon', 'dagger', `${id}-w0`, 0, true),
+      makeGear('armor', 'leather', `${id}-a0`, 0, true),
+    ],
+    equippedWeapon: `${id}-w0`,
+    equippedArmor: `${id}-a0`,
     facing: 0, // face north — toward the camp's descent portal
     alive: true,
   };
@@ -277,16 +314,15 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
   // Striking an unaware monster (sleeping / wandering) lands a sneak attack; the
   // blow then wakes it regardless.
   const sneak = isUnaware(m.state);
-  const attack = getClass(st.classId).attack;
-  const net = netEnchant(0, st.strength, UNARMED_STR_REQ);
+  const weapon = equippedWeapon(st);
   m.state = 'hunting';
 
-  if (!rollHit(weaponAccuracy(net), m.defense, run.combatRng)) {
+  if (!rollHit(equippedAccuracy(weapon, st.strength), m.defense, run.combatRng)) {
     send(player.ws, { t: 'log', text: `You miss the ${m.name}.` });
     return;
   }
-  let dmg = rollDamage(damageRange(attack, 2), net, run.combatRng);
-  if (sneak) dmg *= sneakMultiplier(false);
+  let dmg = weaponDamageRoll(weapon, st.strength, run.combatRng);
+  if (sneak) dmg *= sneakMultiplier(isDaggerEquipped(weapon));
   m.hp -= dmg;
 
   if (m.hp <= 0) {
@@ -329,9 +365,20 @@ function itemLabel(run: Run, kindId: ItemKindId): string {
   return displayName(kindId, run.identities, run.discovered);
 }
 
-/** Collect any loot on the player's current cell. */
+/** Collect any loot (gold / consumable / gear) on the player's current cell. */
 function collectLootHere(run: Run, player: Player): void {
   const st = player.state;
+  // Gear drops are a separate stream — pick those up first.
+  const gearList = run.gear.get(st.level);
+  if (gearList) {
+    const gi = gearList.findIndex((g) => g.col === st.col && g.row === st.row);
+    if (gi >= 0) {
+      const [g] = gearList.splice(gi, 1);
+      const inst = makeGear(g.gearCategory, g.gearKindId, g.id, g.enchantLevel);
+      st.gear.push(inst);
+      send(player.ws, { t: 'log', text: `You pick up a ${gearDisplayName(inst)}.` });
+    }
+  }
   const list = run.loot.get(st.level);
   if (!list) return;
   const idx = list.findIndex((l) => l.col === st.col && l.row === st.row);
@@ -643,7 +690,28 @@ function applyItemEffect(run: Run, player: Player, kindId: ItemKindId): boolean 
       send(player.ws, { t: 'log', text: `A shrill alarm rings out — every monster on the level is now hunting you!` });
       return true;
     }
+    case 'enchanting': {
+      // Enchant the equipped weapon, else equipped armor, else the first carried
+      // piece of gear. Declines (not consumed) if the player carries no gear.
+      const pick = equippedWeapon(st) ?? equippedArmor(st) ?? st.gear[0] ?? null;
+      if (!pick) {
+        send(player.ws, { t: 'log', text: `You read the scroll, but carry no gear to enchant.` });
+        return false;
+      }
+      const gi = st.gear.findIndex((g) => g.instId === pick.instId);
+      st.gear[gi] = revealEnchant(enchantItem(st.gear[gi]));
+      send(player.ws, { t: 'log', text: `Your ${gearDisplayName(st.gear[gi])} glows — mightier, and lighter to wield.` });
+      return true;
+    }
     case 'identify': {
+      // Prefer revealing an unidentified gear enchant; else an unknown consumable
+      // kind (other than the identify scroll itself).
+      const gi = st.gear.findIndex((g) => !g.enchantKnown);
+      if (gi >= 0) {
+        st.gear[gi] = revealEnchant(st.gear[gi]);
+        send(player.ws, { t: 'log', text: `The scroll reveals: ${gearDisplayName(st.gear[gi])}.` });
+        return true;
+      }
       // Reveal the first carried, still-unknown kind other than the scroll itself.
       const target = st.inventory.find((s) => s.kindId !== 'identify' && !run.discovered.has(s.kindId));
       if (target) {
@@ -677,6 +745,29 @@ function handleUseItem(run: Run, player: Player, kindId: string): void {
   endPlayerTurn(run, player);
 }
 
+/** Equip (or unequip) a carried gear instance by id. Equipping into an occupied
+ *  slot swaps; equipping the already-equipped piece unequips it. Takes a turn. */
+function handleEquip(run: Run, player: Player, instId: string): void {
+  const st = player.state;
+  if (!st.alive) return;
+  const inst = st.gear.find((g) => g.instId === instId);
+  if (!inst) return;
+  if (inst.category === 'weapon') {
+    st.equippedWeapon = st.equippedWeapon === instId ? null : instId;
+    send(player.ws, {
+      t: 'log',
+      text: st.equippedWeapon ? `You wield the ${gearDisplayName(inst)}.` : `You put away the ${gearDisplayName(inst)}.`,
+    });
+  } else {
+    st.equippedArmor = st.equippedArmor === instId ? null : instId;
+    send(player.ws, {
+      t: 'log',
+      text: st.equippedArmor ? `You don the ${gearDisplayName(inst)}.` : `You remove the ${gearDisplayName(inst)}.`,
+    });
+  }
+  endPlayerTurn(run, player);
+}
+
 /** Pass a turn in place (rest): the world advances, you regenerate, and nearby
  *  monsters close in. No-op if dead. */
 function handleWait(run: Run, player: Player): void {
@@ -696,7 +787,8 @@ function handleWait(run: Run, player: Player): void {
  *  defense, then a clumped damage roll. Player HP reaching 0 is permadeath. */
 function monsterBite(run: Run, floor: number, m: Monster, target: Player): void {
   const st = target.state;
-  if (!rollHit(m.accuracy, PLAYER_DEFENSE, run.combatRng)) {
+  const def = equippedDefense(equippedArmor(st), st.strength);
+  if (!rollHit(m.accuracy, def, run.combatRng)) {
     send(target.ws, { t: 'log', text: `The ${m.name} lunges — and misses.` });
     return;
   }
@@ -874,6 +966,7 @@ const INTENTS: IntentRegistry = {
   move: ({ run, player }, msg) => handleMove(run, player, msg.dcol, msg.drow),
   interact: ({ run, player }) => handleInteract(run, player),
   'use-item': ({ run, player }, msg) => handleUseItem(run, player, msg.kindId),
+  equip: ({ run, player }, msg) => handleEquip(run, player, msg.instId),
   wait: ({ run, player }) => handleWait(run, player),
   descend: ({ run, player }) => descendFromCamp(run, player),
   // Only the potion shop is stocked; guard the item so an unknown value can't be honoured.

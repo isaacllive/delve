@@ -1019,15 +1019,19 @@
     // uneven rock.
     for (const it of loot) {
       const isGold = it.kind === 'gold';
-      // Items on the floor reveal only their category: a scroll (parchment tan)
-      // vs a potion vial (violet). True identity stays hidden until it's used.
-      const isScroll = it.category === 'scroll';
-      const itemColor = isScroll ? 0xe8d8a0 : 0xb15aff;
+      const isGear = it.kind === 'gear';
+      // Floor pickups reveal only their category: gold mound, a potion vial
+      // (violet) / scroll (parchment tan), or gear (steel — weapon vs armor
+      // tint). True identity/enchant stays hidden until picked up.
+      const itemColor = it.category === 'scroll' ? 0xe8d8a0 : 0xb15aff;
+      const gearColor = it.gearCategory === 'armor' ? 0x9fb4c8 : 0xd8d8e0;
       const mesh = new THREE.Mesh(
         isGold
           ? new THREE.CylinderGeometry(0.11, 0.2, 0.2, 16)
-          : new THREE.CylinderGeometry(0.1, 0.14, 0.32, 8),
-        new THREE.MeshBasicMaterial({ color: isGold ? 0xffcf3a : itemColor, depthTest: false }),
+          : isGear
+            ? new THREE.BoxGeometry(0.14, 0.4, 0.06)
+            : new THREE.CylinderGeometry(0.1, 0.14, 0.32, 8),
+        new THREE.MeshBasicMaterial({ color: isGold ? 0xffcf3a : isGear ? gearColor : itemColor, depthTest: false }),
       );
       const baseY = isGold ? 0.13 : 0.22;
       mesh.position.set(it.col, baseY, it.row);

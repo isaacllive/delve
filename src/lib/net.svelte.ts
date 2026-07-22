@@ -133,6 +133,10 @@ export class GameClient {
   useItem(kindId: ItemKindId): void {
     this.send({ t: 'use-item', kindId });
   }
+  /** Equip (or unequip) a carried gear instance by id. */
+  equip(instId: string): void {
+    this.send({ t: 'equip', instId });
+  }
   /** Pass a turn in place (rest). */
   wait(): void {
     this.send({ t: 'wait' });

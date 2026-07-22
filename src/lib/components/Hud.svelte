@@ -3,6 +3,7 @@
   import { compassLabel } from '$lib/game/protocol.ts';
   import { getClass } from '$lib/game/classes.ts';
   import { makeIdentities, displayName } from '$lib/game/items.ts';
+  import { gearDisplayName } from '$lib/game/gear.ts';
   import type { InteractPrompt } from '$lib/game/interactions.ts';
 
   let {
@@ -42,6 +43,15 @@
       kindId: s.kindId,
       count: s.count,
       name: identities ? displayName(s.kindId, identities, discovered) : String(s.kindId),
+    })),
+  );
+  // Carried gear, flagged with whether it's the equipped weapon/armor.
+  const gear = $derived(
+    (me?.gear ?? []).map((g) => ({
+      instId: g.instId,
+      name: gearDisplayName(g),
+      category: g.category,
+      equipped: g.instId === me?.equippedWeapon || g.instId === me?.equippedArmor,
     })),
   );
 
@@ -84,6 +94,15 @@
           {:else}
             <span class="inv-empty">Pack empty</span>
           {/if}
+        </div>
+        <div class="gear" title="Click to equip / unequip">
+          {#each gear as g (g.instId)}
+            <button class="item gearitem" class:equipped={g.equipped} onclick={() => client.equip(g.instId)}>
+              <span class="glyph">{g.category === 'weapon' ? '⚔' : '🛡'}</span>
+              <span class="iname">{g.name}</span>
+              {#if g.equipped}<span class="worn">equipped</span>{/if}
+            </button>
+          {/each}
         </div>
       </div>
     {/if}
@@ -381,6 +400,26 @@
     font-size: 11px;
     color: #6a6f79;
     font-style: italic;
+  }
+  .me-class .gear {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 5px;
+  }
+  .me-class .gearitem .glyph {
+    min-width: 15px;
+    text-align: center;
+  }
+  .me-class .gearitem.equipped {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  .me-class .gearitem .worn {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
   }
   .roster {
     display: flex;

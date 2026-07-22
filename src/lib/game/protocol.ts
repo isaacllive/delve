@@ -9,6 +9,7 @@
 // threat model here (see plan's deferred hardening note).
 
 import type { ItemKindId, ItemCategory } from './items.ts';
+import type { GearInstance, GearCategory } from './gear.ts';
 
 /** One stack of carried items (a kind + how many). The client renders each by
  *  its per-run appearance (derived from the seed) unless the kind is in the
@@ -45,6 +46,12 @@ export interface PlayerState {
   /** Items carried this expedition (lost on death). Rendered by appearance
    *  until the kind is identified. */
   inventory: InvStack[];
+  /** Gear (weapons/armor) carried this expedition. Base type is known; enchant
+   *  is hidden until identified. Lost on death. */
+  gear: GearInstance[];
+  /** instId of the equipped weapon / armor (from `gear`), or null. */
+  equippedWeapon: string | null;
+  equippedArmor: string | null;
   /** Facing as a compass heading in radians: 0 = North (−row), increasing
    *  clockwise (PI/2 = East). Updated from the last move direction. */
   facing: number;
@@ -90,9 +97,11 @@ export interface TrapState {
  *  it's in your pack (and even then, disguised until identified). */
 export interface LootState {
   id: string;
-  kind: 'gold' | 'item';
+  kind: 'gold' | 'item' | 'gear';
   /** Item category (present when kind === 'item'), for the on-floor icon. */
   category?: ItemCategory;
+  /** Gear category (present when kind === 'gear'), for the on-floor icon. */
+  gearCategory?: GearCategory;
   col: number;
   row: number;
   level: number;
@@ -118,6 +127,7 @@ export type ClientMsg =
   | { t: 'move'; dcol: number; drow: number }
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
   | { t: 'use-item'; kindId: ItemKindId } // quaff/read a carried item by kind
+  | { t: 'equip'; instId: string } // equip/unequip a carried gear instance
   | { t: 'wait' } // pass a turn in place (rest)
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
