@@ -41,6 +41,19 @@ npm run test       # vitest — LoS / vision / dungeon connectivity + determinis
 npm run check      # svelte-check (types)
 ```
 
+### Share it (public URL)
+
+```sh
+npm run dev:tunnel   # build + preview + a Cloudflare quick tunnel
+```
+
+Prints an `https://<name>.trycloudflare.com` URL that forwards HTTP **and** the
+`/ws` game socket to your local preview server — hand it to someone off-network
+to playtest multiplayer. No Cloudflare account needed; the tunnel is ephemeral
+(a new URL each run) and closes on Ctrl-C. Requires the `cloudflared` binary at
+`./bin/cloudflared` (gitignored) — `scripts/dev-tunnel.sh` prints the one-line
+`curl` to fetch it if it's missing.
+
 ## How it fits together
 
 | Concern | Where |

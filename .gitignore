@@ -8,3 +8,7 @@ node_modules
 vite.config.ts.timestamp-*
 vite.config.js.timestamp-*
 *.log
+
+# Vendored cloudflared binary for `npm run dev:tunnel` (large, platform-specific
+# — fetched per-machine, see scripts/dev-tunnel.sh).
+/bin/
