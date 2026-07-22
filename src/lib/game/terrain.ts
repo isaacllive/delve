@@ -16,6 +16,7 @@ export type TerrainKind =
   | 'pit'
   | 'water'
   | 'ledge'
+  | 'grass'
   | 'stairsDown'
   | 'stairsUp';
 
@@ -107,4 +108,25 @@ export function hazardAt(level: Level, col: number, row: number): 'pit' | 'water
   if (c.kind === 'pit') return 'pit';
   if (c.kind === 'water') return 'water';
   return null;
+}
+
+// ── flammability (fuel for the fire simulation, hazards.ts) ──────────────────
+// Grass is a walkable, sightless, non-hazard floor variant that FIRE can ignite,
+// spread through, and consume (Brogue: grass/bog/bridges/webs burn). The set is
+// the single source of truth for "what fire can catch"; extend it (oil, bog…)
+// rather than scattering kind checks through the sim. `flammable` is a derived
+// flag of the terrain kind, in the same spirit as blocksMove / hazardAt above.
+
+/** Terrain kinds fire can ignite and burn away. Grass to start (per Brogue). */
+const FLAMMABLE_KINDS: ReadonlySet<TerrainKind> = new Set<TerrainKind>(['grass']);
+
+/** The `flammable` flag for a terrain kind — can fire catch here? */
+export function isFlammableKind(kind: TerrainKind): boolean {
+  return FLAMMABLE_KINDS.has(kind);
+}
+
+/** Is the cell at (col,row) flammable fuel? Out-of-bounds is not. */
+export function isFlammable(level: Level, col: number, row: number): boolean {
+  const c = cellAt(level, col, row);
+  return c ? isFlammableKind(c.kind) : false;
 }
