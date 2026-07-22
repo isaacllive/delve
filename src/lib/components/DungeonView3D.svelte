@@ -1449,12 +1449,12 @@
     _v3.project(camera);
     const ccx = _v3.x, ccy = _v3.y;
 
-    // ── Ground/wall oculus: fade WALL blocks that fall inside a screen-disc
-    // around the delver, so the pocket of floor AROUND the character opens up —
-    // not merely a tunnel to them. Only blocks in front of the delver (closer to
-    // the camera, so no void is revealed) are considered; the block-level
-    // granularity carves a rounded hollow. (The roof oculus was removed — the
-    // wall disc alone opens the view now.)
+    // ── Oculus: fade both the WALL blocks and the ROOF rock that fall inside a
+    // screen-disc around the delver, so the whole pocket of space AROUND the
+    // character opens up — walls and ceiling together, not merely a tunnel to
+    // them. Only cells in front of the delver (closer to the camera, so no void
+    // is revealed) are cleared; the wall's block-level granularity carves a
+    // rounded hollow while the roof opens one block per cell.
     const gc0 = Math.max(0, meCell.col - GROUND_OCC_SCAN);
     const gc1 = Math.min(l.cols - 1, meCell.col + GROUND_OCC_SCAN);
     const gr0 = Math.max(0, meCell.row - GROUND_OCC_SCAN);
@@ -1463,17 +1463,25 @@
     for (let r = gr0; r <= gr1; r++) {
       for (let c = gc0; c <= gc1; c++) {
         const idx = cellIndex(c, r, l.cols);
-        if (l.cells[idx].kind !== 'wall') continue;
-        if (c === meCell.col && r === meCell.row) continue;
-        const s = cellBlockStart[idx];
-        const n = cellBlockCount[idx];
-        for (let k = 0; k < n; k++) {
-          const b = s + k;
-          const by = blockY[b];
-          if (by > yTop) break; // blocks are bottom→top; nothing above matters
-          if (_v3.set(c, by, r).distanceTo(camPos) >= charDist + 0.5) continue;
-          const w = circleWeight(c, by, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
-          if (w > 0) bump(occTarget, b, w);
+        if (l.cells[idx].kind === 'wall') {
+          if (c === meCell.col && r === meCell.row) continue;
+          const s = cellBlockStart[idx];
+          const n = cellBlockCount[idx];
+          for (let k = 0; k < n; k++) {
+            const b = s + k;
+            const by = blockY[b];
+            if (by > yTop) break; // blocks are bottom→top; nothing above matters
+            if (_v3.set(c, by, r).distanceTo(camPos) >= charDist + 0.5) continue;
+            const w = circleWeight(c, by, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
+            if (w > 0) bump(occTarget, b, w);
+          }
+        } else {
+          // Roof oculus: open the overhead rock in the same disc so it never
+          // walls the camera off from the pocket the floor/walls just opened.
+          const roofY = l.cells[idx].ceiling ?? CEIL_FALLBACK;
+          if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
+          const w = circleWeight(c, roofY, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
+          if (w > 0) bump(occTargetCeil, idx, w);
         }
       }
     }
@@ -1491,8 +1499,7 @@
       if (o <= 0.001 && tgt === 0) occActive.delete(b);
       else occActive.add(b);
     }
-    // The roof oculus was removed; occTargetCeil stays empty, so this only eases
-    // any still-open roof cell back to solid after the feature was dropped.
+    // Ease flagged roof cells open, previously-flagged ones back to solid.
     let cChanged = false;
     for (const i of new Set([...occActiveCeil, ...occTargetCeil.keys()])) {
       const tgt = occTargetCeil.get(i) ?? 0;
