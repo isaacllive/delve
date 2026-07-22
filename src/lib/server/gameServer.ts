@@ -320,6 +320,73 @@ function monsterAt(run: Run, floor: number, col: number, row: number): Monster |
   return monstersOn(run, floor).find((m) => m.hp > 0 && m.col === col && m.row === row);
 }
 
+/** Does this monster carry an ability flag (see monsters.ts `MonsterAbility`)? */
+function mHas(m: Monster, ability: string): boolean {
+  return m.abilities.includes(ability as (typeof m.abilities)[number]);
+}
+
+/** Remove a slain monster and resolve its death abilities (explodesOnDeath). */
+function killMonster(run: Run, floor: number, m: Monster): void {
+  m.hp = 0;
+  const list = run.monsters.get(floor);
+  if (list) run.monsters.set(floor, list.filter((x) => x !== m));
+  if (mHas(m, 'explodesOnDeath')) {
+    const level = getLevel(run.dungeon, floor);
+    ignite(hazardField(run, floor), m.col, m.row);
+    const burst = Math.max(2, m.damage * 2);
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const c = m.col + dc;
+        const r = m.row + dr;
+        for (const p of run.players.values()) {
+          if (p.state.alive && p.state.level === floor && p.state.col === c && p.state.row === r) {
+            p.state.hp -= burst;
+            if (p.state.hp <= 0) {
+              p.state.hp = 0;
+              p.state.alive = false;
+              broadcast(run, { t: 'log', text: `☠ ${p.state.name} was caught in the ${m.name}'s blast on level ${floor + 1}.` });
+            } else {
+              send(p.ws, { t: 'log', text: `The ${m.name} detonates! (−${burst} HP)` });
+            }
+          }
+        }
+        const other = monsterAt(run, floor, c, r);
+        if (other && other !== m) {
+          other.hp -= burst;
+          if (other.hp <= 0) killMonster(run, floor, other);
+        }
+        void level;
+      }
+    }
+  }
+}
+
+/** Pink-jelly split: a surviving splitter clones into a free adjacent cell,
+ *  halving its HP between the two. No-op if too weak or hemmed in. */
+function splitMonster(run: Run, floor: number, m: Monster): void {
+  if (!mHas(m, 'splitsOnHit') || m.hp <= 1) return;
+  const level = getLevel(run.dungeon, floor);
+  const occupied = new Set(monstersOn(run, floor).map((x) => x.row * level.cols + x.col));
+  for (const [dc, dr] of FACING_DELTAS) {
+    const c = m.col + dc;
+    const r = m.row + dr;
+    if (blocksMove(level, c, r) || occupied.has(r * level.cols + c)) continue;
+    if (monsterAt(run, floor, c, r) || playerAt(run, floor, c, r)) continue;
+    m.hp = Math.ceil(m.hp / 2);
+    const clone: Monster = { ...m, id: `${m.id}~${run.tick}~${c},${r}`, abilities: [...m.abilities], col: c, row: r, hp: Math.floor(m.hp), hpMax: m.hpMax, ticksUntilTurn: m.actionTicks };
+    run.monsters.get(floor)?.push(clone);
+    return;
+  }
+}
+
+/** Is a delver standing on (col,row) of this floor? */
+function playerAt(run: Run, floor: number, col: number, row: number): boolean {
+  for (const p of run.players.values()) {
+    if (p.state.alive && p.state.level === floor && p.state.col === col && p.state.row === row) return true;
+  }
+  return false;
+}
+
 /** Player bump-attacks a monster (Brogue combat via combat.ts): an accuracy roll
  *  vs the monster's defense, then a clumped, enchant-/strength-scaled damage roll,
  *  tripled against an unaware target (sneak attack). On kill, remove it + drop
@@ -340,12 +407,19 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
   if (sneak) dmg *= sneakMultiplier(isDaggerEquipped(weapon));
   m.hp -= dmg;
 
+  // Acid mounds and the like corrode the weapon that strikes them.
+  if (weapon && mHas(m, 'corrodesWeapon')) {
+    const gi = st.gear.findIndex((g) => g.instId === weapon.instId);
+    if (gi >= 0) {
+      st.gear[gi] = { ...st.gear[gi], enchantLevel: st.gear[gi].enchantLevel - 1, enchantKnown: true };
+      send(player.ws, { t: 'log', text: `Acid hisses over your ${gearDisplayName(st.gear[gi])} — it corrodes!` });
+    }
+  }
+
   if (m.hp <= 0) {
-    m.hp = 0;
-    const list = run.monsters.get(floor);
-    if (list) run.monsters.set(floor, list.filter((x) => x !== m));
     const reward = monsterReward(m.damage, m.boss);
     st.gold += reward;
+    killMonster(run, floor, m);
     if (m.boss) {
       run.bossDefeated = true;
       broadcast(run, { t: 'log', text: `${st.name} slays the ${m.name}! An exit shimmers open. (+${reward}g)` });
@@ -355,6 +429,7 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
     }
   } else {
     send(player.ws, { t: 'log', text: `You hit the ${m.name} for ${dmg}.${sneak ? ' (ambush!)' : ''}` });
+    splitMonster(run, floor, m); // pink jelly & friends divide when struck
   }
 }
 
@@ -919,11 +994,7 @@ function stepFloorHazards(run: Run, floor: number): void {
     if (dmg > 0) {
       m.hp -= dmg;
       m.state = 'hunting'; // pain wakes it
-      if (m.hp <= 0) {
-        m.hp = 0;
-        const list = run.monsters.get(floor);
-        if (list) run.monsters.set(floor, list.filter((x) => x !== m));
-      }
+      if (m.hp <= 0) killMonster(run, floor, m);
     }
   }
 }
@@ -965,8 +1036,22 @@ function monsterBite(run: Run, floor: number, m: Monster, target: Player): void 
     st.hp = 0;
     st.alive = false;
     broadcast(run, { t: 'log', text: `☠ ${st.name} was slain by a ${m.name} on level ${floor + 1}.` });
-  } else {
-    send(target.ws, { t: 'log', text: `The ${m.name} hits you for ${dmg}.` });
+    return;
+  }
+  send(target.ws, { t: 'log', text: `The ${m.name} hits you for ${dmg}.` });
+  // Thieves grab a carried item and bolt (they gain 'flees' for the getaway).
+  if (mHas(m, 'stealsAndFlees') && !mHas(m, 'flees')) {
+    const stack = st.inventory[0];
+    if (stack) {
+      removeFromInventory(st, stack.kindId);
+      m.abilities.push('flees');
+      send(target.ws, { t: 'log', text: `The ${m.name} snatches ${itemLabel(run, stack.kindId)} and flees!` });
+    } else if (st.gold > 0) {
+      const stolen = Math.min(st.gold, 10 + m.damage * 2);
+      st.gold -= stolen;
+      m.abilities.push('flees');
+      send(target.ws, { t: 'log', text: `The ${m.name} grabs ${stolen} gold and flees!` });
+    }
   }
 }
 
@@ -996,21 +1081,36 @@ function actMonster(
   if (!best) return m.actionTicks;
 
   // Update awareness. The boss is a fixed guardian — always hunting.
+  const los = hasLineOfSight(m, best.state, (c, r) => occluderHeight(level, c, r), 0, best.state.elevation);
   if (!m.boss) {
-    const los = hasLineOfSight(m, best.state, (c, r) => occluderHeight(level, c, r), 0, best.state.elevation);
     m.state = nextAwareness(m.state, { dist: bd, los, aggro: AGGRO });
   }
   if (m.state === 'sleeping') return m.actionTicks; // dozing: pass the turn
 
   if (bd <= 1) {
+    monsterBite(run, floor, m, best); // adjacent: bite
+    return m.actionTicks;
+  }
+  // Ranged attackers (turrets, archers) strike down a clear line of sight.
+  if (mHas(m, 'ranged') && bd <= AGGRO && los) {
     monsterBite(run, floor, m, best);
-  } else if (bd <= AGGRO) {
-    // Pursue: prefer the diagonal, then a single axis.
-    const dx = Math.sign(best.state.col - m.col);
-    const dy = Math.sign(best.state.row - m.row);
+    return m.actionTicks;
+  }
+  // Immobile monsters (turrets) never move — they only act at range (above).
+  if (mHas(m, 'immobile')) return m.actionTicks;
+
+  if (bd <= AGGRO) {
+    // Pursue — or, for cowards, retreat: fliers ignore ground hazards, fleers
+    // invert their heading to back away.
+    const flees = mHas(m, 'flees');
+    const flies = mHas(m, 'flies');
+    const dx = (flees ? -1 : 1) * Math.sign(best.state.col - m.col);
+    const dy = (flees ? -1 : 1) * Math.sign(best.state.row - m.row);
     const tryStep = (cc: number, rr: number): boolean => {
       if (cc === m.col && rr === m.row) return false;
-      if (blocksMove(level, cc, rr)) return false;
+      // Fliers are stopped only by walls; walkers by any blocker (walls + pits).
+      const blocked = flies ? cellAt(level, cc, rr)?.kind === 'wall' : blocksMove(level, cc, rr);
+      if (blocked) return false;
       const key = rr * level.cols + cc;
       if (occupied.has(key)) return false;
       if (targets.some((t) => t.state.col === cc && t.state.row === rr)) return false;
