@@ -133,6 +133,8 @@ interface Run {
   purchases: number;
   /** Stateful RNG for live combat rolls (hit/damage). Server-only. */
   combatRng: Rng;
+  /** Summon cooldown (turns remaining) per summoner monster id. Server-only. */
+  summonCd: Map<string, number>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -184,8 +186,21 @@ function ensureMonsters(run: Run, floor: number): void {
   run.gear.set(floor, spawnGear(run.seed, level));
 }
 
-function toMonsterState(m: Monster, floor: number): MonsterState {
-  return { id: m.id, name: m.name, color: m.color, level: floor, col: m.col, row: m.row, hp: m.hp, hpMax: m.hpMax, boss: m.boss, state: m.state };
+function toMonsterState(m: Monster, floor: number, hidden: boolean): MonsterState {
+  return {
+    id: m.id,
+    name: m.name,
+    color: m.color,
+    level: floor,
+    col: m.col,
+    row: m.row,
+    hp: m.hp,
+    hpMax: m.hpMax,
+    boss: m.boss,
+    state: m.state,
+    abilities: m.abilities.length ? [...m.abilities] : undefined,
+    hidden: hidden || undefined,
+  };
 }
 function toLootState(l: Loot, floor: number): LootState {
   return { id: l.id, kind: l.kind, category: l.category, col: l.col, row: l.row, level: floor };
@@ -205,7 +220,15 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     you: youId,
     tick: run.tick,
     players: [...run.players.values()].map((p) => p.state),
-    monsters: monstersOn(run, floor).map((m) => toMonsterState(m, floor)),
+    monsters: monstersOn(run, floor).map((m) => {
+      // Aquatic ambushers stay hidden until a delver is right beside them.
+      const lurking =
+        m.abilities.includes('aquatic') &&
+        ![...run.players.values()].some(
+          (p) => p.state.alive && p.state.level === floor && Math.max(Math.abs(p.state.col - m.col), Math.abs(p.state.row - m.row)) <= 1,
+        );
+      return toMonsterState(m, floor, lurking);
+    }),
     loot: [
       ...lootOn(run, floor).map((l) => toLootState(l, floor)),
       ...gearOn(run, floor).map((g) => gearToLootState(g, floor)),
@@ -275,6 +298,7 @@ function joinRun(
       discovered: new Set(),
       purchases: 0,
       combatRng: makeRng(`${s}#combat`),
+      summonCd: new Map(),
     };
     runs.set(code, run);
   }
@@ -298,6 +322,7 @@ function joinRun(
     // Brogue-faithful: everyone starts at Strength 12, regardless of class.
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
+    poison: 0,
     gold: 0,
     inventory: [],
     // Brogue starting kit: a dagger + leather armor, both equipped and known.
@@ -377,6 +402,45 @@ function splitMonster(run: Run, floor: number, m: Monster): void {
     run.monsters.get(floor)?.push(clone);
     return;
   }
+}
+
+/** Turns a summoner waits between conjurations. */
+const SUMMON_COOLDOWN = 8;
+
+/** Conjure 1–2 weak thralls in free cells around a summoner (conjurer/lich). */
+function summonMinions(run: Run, floor: number, level: DungeonLevel, m: Monster): void {
+  const occupied = new Set(monstersOn(run, floor).map((x) => x.row * level.cols + x.col));
+  let made = 0;
+  for (const [dc, dr] of FACING_DELTAS) {
+    if (made >= 2) break;
+    const c = m.col + dc;
+    const r = m.row + dr;
+    if (blocksMove(level, c, r) || occupied.has(r * level.cols + c)) continue;
+    if (monsterAt(run, floor, c, r) || playerAt(run, floor, c, r)) continue;
+    const hp = Math.max(4, Math.round(m.hpMax * 0.3));
+    const thrall: Monster = {
+      id: `${m.id}!sum${run.tick}-${made}`,
+      kindId: 'thrall',
+      name: `${m.name}'s thrall`,
+      color: m.color,
+      col: c,
+      row: r,
+      hp,
+      hpMax: hp,
+      damage: Math.max(2, Math.round(m.damage * 0.5)),
+      accuracy: Math.max(40, m.accuracy - 10),
+      defense: 0,
+      boss: false,
+      state: 'hunting',
+      ticksUntilTurn: 0,
+      actionTicks: m.actionTicks,
+      abilities: [], // thralls never summon (no runaway chains)
+    };
+    run.monsters.get(floor)?.push(thrall);
+    occupied.add(r * level.cols + c);
+    made++;
+  }
+  if (made > 0) broadcast(run, { t: 'log', text: `The ${m.name} conjures ${made} thrall${made > 1 ? 's' : ''}!` });
 }
 
 /** Is a delver standing on (col,row) of this floor? */
@@ -1039,6 +1103,12 @@ function monsterBite(run: Run, floor: number, m: Monster, target: Player): void 
     return;
   }
   send(target.ws, { t: 'log', text: `The ${m.name} hits you for ${dmg}.` });
+  // Venomous monsters leave poison that saps health over the coming turns.
+  if (mHas(m, 'poisons')) {
+    const stacks = 3 + Math.floor(m.damage / 2);
+    st.poison += stacks;
+    send(target.ws, { t: 'log', text: `Venom courses through you! (poison ${st.poison})` });
+  }
   // Thieves grab a carried item and bolt (they gain 'flees' for the getaway).
   if (mHas(m, 'stealsAndFlees') && !mHas(m, 'flees')) {
     const stack = st.inventory[0];
@@ -1096,20 +1166,32 @@ function actMonster(
     monsterBite(run, floor, m, best);
     return m.actionTicks;
   }
+  // Summoners conjure thralls on a cooldown instead of closing the distance.
+  if (mHas(m, 'summons') && bd <= AGGRO) {
+    const cd = run.summonCd.get(m.id) ?? 0;
+    if (cd <= 0) {
+      summonMinions(run, floor, level, m);
+      run.summonCd.set(m.id, SUMMON_COOLDOWN);
+      return m.actionTicks;
+    }
+    run.summonCd.set(m.id, cd - 1);
+  }
   // Immobile monsters (turrets) never move — they only act at range (above).
   if (mHas(m, 'immobile')) return m.actionTicks;
 
   if (bd <= AGGRO) {
     // Pursue — or, for cowards, retreat: fliers ignore ground hazards, fleers
-    // invert their heading to back away.
+    // invert their heading to back away, aquatic hunters stay in deep water.
     const flees = mHas(m, 'flees');
     const flies = mHas(m, 'flies');
+    const aquatic = mHas(m, 'aquatic');
     const dx = (flees ? -1 : 1) * Math.sign(best.state.col - m.col);
     const dy = (flees ? -1 : 1) * Math.sign(best.state.row - m.row);
     const tryStep = (cc: number, rr: number): boolean => {
       if (cc === m.col && rr === m.row) return false;
-      // Fliers are stopped only by walls; walkers by any blocker (walls + pits).
-      const blocked = flies ? cellAt(level, cc, rr)?.kind === 'wall' : blocksMove(level, cc, rr);
+      const kind = cellAt(level, cc, rr)?.kind;
+      // Aquatic: water only. Fliers: anything but walls. Walkers: no walls/pits.
+      const blocked = aquatic ? kind !== 'water' : flies ? kind === 'wall' : blocksMove(level, cc, rr);
       if (blocked) return false;
       const key = rr * level.cols + cc;
       if (occupied.has(key)) return false;
@@ -1141,6 +1223,21 @@ function takeMonsterTurns(run: Run, floor: number, elapsed: number): void {
   const playerProxy: Scheduled = { ticksUntilTurn: elapsed };
   const actors: Scheduled[] = [playerProxy, ...monsters];
   runUntilPlayer(actors, 0, (i) => actMonster(run, floor, level, monsters[i - 1], occupied, targets));
+}
+
+/** Poison tick: a poisoned delver loses 1 HP per turn until it decays to 0.
+ *  Resolves permadeath if the venom finishes them. */
+function maybePoison(run: Run, floor: number, player: Player): void {
+  const st = player.state;
+  if (!st.alive || st.poison <= 0) return;
+  st.poison -= 1;
+  st.hp -= 1;
+  if (st.hp <= 0) {
+    st.hp = 0;
+    st.alive = false;
+    st.poison = 0;
+    broadcast(run, { t: 'log', text: `☠ ${st.name} succumbed to poison on level ${floor + 1}.` });
+  }
 }
 
 /** Passive regeneration: a delver heals `maxHP` over TURNS_FOR_FULL_REGEN turns
@@ -1178,7 +1275,8 @@ const WORLD_SYSTEMS: WorldSystem[] = [
   ({ run, player, cost }) => takeMonsterTurns(run, player.state.level, cost),
   // Fire spreads and gas diffuses on the delver's floor, burning anything in it.
   ({ run, player }) => stepFloorHazards(run, player.state.level),
-  // The delver regenerates a sliver of health.
+  // Poison saps the delver's health, then they regenerate a sliver.
+  ({ run, player }) => maybePoison(run, player.state.level, player),
   ({ player }) => maybeRegen(player),
 ];
 

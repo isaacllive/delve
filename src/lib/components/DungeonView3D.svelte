@@ -113,6 +113,7 @@
   // built once per state + reused. Marked shared on each Sprite so the avatar
   // refresh teardown leaves the cached material/texture intact.
   const awarenessMats = new Map<MonsterAwareness, import('three').SpriteMaterial>();
+  const abilityMats = new Map<string, import('three').SpriteMaterial>();
   let raf = 0;
   let disposed = false;
   // Flipped true once the async Three.js init finishes. It's $state so the
@@ -903,6 +904,47 @@
     hunting: '‼️',
   };
 
+  // The most tactically-relevant ability gets a glyph above the monster, in
+  // priority order (a monster may carry several). Purely informational.
+  const ABILITY_GLYPHS: Array<[string, string]> = [
+    ['summons', '✨'],
+    ['ranged', '🏹'],
+    ['splitsOnHit', '🔀'],
+    ['explodesOnDeath', '💥'],
+    ['corrodesWeapon', '🧪'],
+    ['poisons', '☠'],
+    ['stealsAndFlees', '🤏'],
+    ['aquatic', '🌊'],
+  ];
+  function abilityGlyph(abilities: string[] | undefined): string | null {
+    if (!abilities?.length) return null;
+    for (const [ability, glyph] of ABILITY_GLYPHS) if (abilities.includes(ability)) return glyph;
+    return null;
+  }
+  /** A camera-facing sprite for an ability glyph, cached per glyph. */
+  function abilitySprite(glyph: string): import('three').Sprite | null {
+    if (!THREE) return null;
+    let mat = abilityMats.get(glyph);
+    if (!mat) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const ctx = cv.getContext('2d');
+      if (ctx) {
+        ctx.font = '40px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(glyph, 32, 36);
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.needsUpdate = true;
+      mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, fog: false, transparent: true });
+      abilityMats.set(glyph, mat);
+    }
+    const sprite = new THREE.Sprite(mat);
+    sprite.userData.shared = true;
+    return sprite;
+  }
+
   /** A camera-facing sprite showing a monster's awareness glyph, or null when
    *  THREE isn't ready. The SpriteMaterial (with its canvas glyph texture) is
    *  cached per state and reused; each Sprite is tagged shared so the avatar
@@ -954,6 +996,7 @@
     // no mini matches (or figures are disabled) fall back to the classic
     // octahedron so a foe is never invisible.
     for (const mo of monsters) {
+      if (mo.hidden) continue; // aquatic ambusher lurking — not yet visible
       const miniId = useFigures ? pickMiniId(mo.name) : null;
       const fig = miniId ? figureFor(miniId, hexColor(mo.color)) : null;
       if (fig) {
@@ -987,6 +1030,17 @@
           tag.scale.setScalar(0.6);
           tag.renderOrder = 18;
           avatarGroup.add(tag);
+        }
+      }
+      // Ability glyph, tucked beside the awareness tag.
+      const aglyph = abilityGlyph(mo.abilities);
+      if (aglyph) {
+        const asp = abilitySprite(aglyph);
+        if (asp) {
+          asp.position.set(mo.col + 0.42, mo.boss ? 2.0 : 1.5, mo.row);
+          asp.scale.setScalar(0.5);
+          asp.renderOrder = 18;
+          avatarGroup.add(asp);
         }
       }
     }
@@ -1466,6 +1520,11 @@
       mat.dispose();
     }
     awarenessMats.clear();
+    for (const mat of abilityMats.values()) {
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    abilityMats.clear();
     voxelTerrain?.dispose();
     voxelTerrain = null;
     // Shared across every level's materials, so it's freed once here.

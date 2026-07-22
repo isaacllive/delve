@@ -42,6 +42,8 @@ export interface PlayerState {
   /** Strength: gates weapon/armor requirements and scales combat via netEnchant
    *  (combat.ts). Starts at 12 and grows ONLY by drinking a Potion of Strength. */
   strength: number;
+  /** Remaining poison — 1 HP lost per turn until it decays to 0 (0 = unpoisoned). */
+  poison: number;
   /** Gold carried this expedition (lost on death). */
   gold: number;
   /** Items carried this expedition (lost on death). Rendered by appearance
@@ -78,6 +80,11 @@ export interface MonsterState {
   boss: boolean;
   /** Awareness state, for the client's stealth indicator. */
   state: MonsterAwareness;
+  /** Notable ability flags, for the client's monster tint/glyph. */
+  abilities?: string[];
+  /** True when this monster is currently concealed (aquatic ambusher lurking in
+   *  deep water) — the client skips rendering it until it surfaces to strike. */
+  hidden?: boolean;
 }
 
 /** A trap revealed to the client (sprung, or spotted by standing next to it).

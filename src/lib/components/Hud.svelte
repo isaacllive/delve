@@ -78,6 +78,7 @@
         <b>{myClass.name}</b>
         <span class="hp">♥ {me.hp}/{me.hpMax}</span>
         <span class="str" title="Strength — grows only by drinking a Potion of Strength">💪 {me.strength}</span>
+        {#if me.poison > 0}<span class="poison" title="Poisoned — losing 1 HP per turn">🤢 {me.poison}</span>{/if}
         <span class="purse">🪙 {me.gold}</span>
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}
