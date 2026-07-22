@@ -12,7 +12,7 @@ import type { BiomePalette } from './biomes.ts';
 
 /** Bottom / top of the rock volume in world Y (one voxel = one unit). */
 export const VOX_BASE = -3;
-export const VOX_TOP = 11;
+export const VOX_TOP = 15;
 const SIZE_Y = VOX_TOP - VOX_BASE;
 
 /** Voxel kinds (non-zero = solid); map to biome palette colours. */
