@@ -2,6 +2,7 @@
   import type { GameClient } from '$lib/net.svelte.ts';
   import { compassLabel } from '$lib/game/protocol.ts';
   import { getClass } from '$lib/game/classes.ts';
+  import { makeIdentities, displayName } from '$lib/game/items.ts';
   import type { InteractPrompt } from '$lib/game/interactions.ts';
 
   let {
@@ -31,6 +32,19 @@
   const rose = $derived(cameraYaw); // radians to rotate the rose
   const needle = $derived(facing + cameraYaw); // player facing, relative to view
 
+  // Inventory: appearances are derived from the seed (same table the server
+  // uses); a kind shows its true name once the party has discovered it.
+  const identities = $derived(client.seed ? makeIdentities(client.seed) : null);
+  const discovered = $derived(new Set(client.discovered));
+  const items = $derived(
+    (me?.inventory ?? []).map((s, i) => ({
+      slot: i + 1,
+      kindId: s.kindId,
+      count: s.count,
+      name: identities ? displayName(s.kindId, identities, discovered) : String(s.kindId),
+    })),
+  );
+
   function submitChat(e: Event) {
     e.preventDefault();
     if (!chatText.trim()) return;
@@ -54,9 +68,22 @@
         <b>{myClass.name}</b>
         <span class="hp">♥ {me.hp}/{me.hpMax}</span>
         <span class="str" title="Strength — grows only by drinking a Potion of Strength">💪 {me.strength}</span>
-        <span class="purse">🪙 {me.gold} · 🧪 {me.potions}</span>
+        <span class="purse">🪙 {me.gold}</span>
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}
+        </div>
+        <div class="inv" title="Press 1–9 (or click) to use">
+          {#if items.length}
+            {#each items as it (it.kindId)}
+              <button class="item" onclick={() => client.useItem(it.kindId)}>
+                <span class="slot">{it.slot}</span>
+                <span class="iname">{it.name}</span>
+                {#if it.count > 1}<span class="qty">×{it.count}</span>{/if}
+              </button>
+            {/each}
+          {:else}
+            <span class="inv-empty">Pack empty</span>
+          {/if}
         </div>
       </div>
     {/if}
@@ -308,6 +335,52 @@
     padding: 2px 6px;
     font-size: 10px;
     color: #cfd3db;
+  }
+  .me-class .inv {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 7px;
+  }
+  .me-class .item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    text-align: left;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 5px;
+    padding: 3px 6px;
+    font-size: 11px;
+    color: #dfe3ea;
+    cursor: pointer;
+  }
+  .me-class .item:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .me-class .item .slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #12131a;
+    font-weight: 700;
+    font-size: 10px;
+  }
+  .me-class .item .iname {
+    flex: 1;
+  }
+  .me-class .item .qty {
+    color: #9aa0aa;
+  }
+  .me-class .inv-empty {
+    font-size: 11px;
+    color: #6a6f79;
+    font-style: italic;
   }
   .roster {
     display: flex;

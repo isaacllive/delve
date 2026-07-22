@@ -4,6 +4,7 @@
 // sends intents and mirrors the broadcast state.
 
 import type { ClientMsg, LootState, MonsterState, PlayerState, ServerMsg, TrapState } from './game/protocol.ts';
+import type { ItemKindId } from './game/items.ts';
 
 export interface ChatLine {
   name: string;
@@ -18,6 +19,8 @@ export class GameClient {
   loot = $state<LootState[]>([]);
   /** Revealed traps (sprung or spotted) on the local delver's floor. */
   traps = $state<TrapState[]>([]);
+  /** Item kinds the party has identified this run (shared knowledge). */
+  discovered = $state<ItemKindId[]>([]);
   youId = $state<string | null>(null);
   seed = $state<string | null>(null);
   levelCount = $state(0);
@@ -90,6 +93,7 @@ export class GameClient {
         this.monsters = msg.monsters;
         this.loot = msg.loot;
         this.traps = msg.traps;
+        this.discovered = msg.discovered;
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
         break;
@@ -125,8 +129,9 @@ export class GameClient {
   interact(): void {
     this.send({ t: 'interact' });
   }
-  usePotion(): void {
-    this.send({ t: 'use' });
+  /** Use (quaff/read) a carried item by its kind. */
+  useItem(kindId: ItemKindId): void {
+    this.send({ t: 'use-item', kindId });
   }
   /** Leave the out-of-dungeon hub and drop into floor 0. */
   descend(): void {

@@ -69,8 +69,9 @@
             <p class="blurb">{myClass.blurb}</p>
             <div class="stats">
               <span class="stat hp">♥ {me.hp}/{me.hpMax}</span>
+              <span class="stat" title="Strength">💪 {me.strength}</span>
               <span class="stat">🪙 {me.gold}g</span>
-              <span class="stat">🧪 {me.potions}</span>
+              <span class="stat" title="Items carried">🎒 {me.inventory.reduce((n, s) => n + s.count, 0)}</span>
             </div>
             <div class="abilities">
               {#each myClass.abilities as ab (ab.name)}
@@ -82,7 +83,7 @@
           <div class="shop">
             <h2>Provisioner</h2>
             <button class="buy" disabled={!canAfford} onclick={() => client.buy('potion')}>
-              Buy Healing Potion
+              Buy Sealed Potion
               <span class="price" class:short={!canAfford}>{POTION_COST}g</span>
             </button>
             {#if !canAfford}<p class="hint">Not enough gold — bring back more from the depths.</p>{/if}

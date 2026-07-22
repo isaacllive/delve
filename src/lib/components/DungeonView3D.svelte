@@ -1019,11 +1019,15 @@
     // uneven rock.
     for (const it of loot) {
       const isGold = it.kind === 'gold';
+      // Items on the floor reveal only their category: a scroll (parchment tan)
+      // vs a potion vial (violet). True identity stays hidden until it's used.
+      const isScroll = it.category === 'scroll';
+      const itemColor = isScroll ? 0xe8d8a0 : 0xb15aff;
       const mesh = new THREE.Mesh(
         isGold
           ? new THREE.CylinderGeometry(0.11, 0.2, 0.2, 16)
           : new THREE.CylinderGeometry(0.1, 0.14, 0.32, 8),
-        new THREE.MeshBasicMaterial({ color: isGold ? 0xffcf3a : 0xff5a7a, depthTest: false }),
+        new THREE.MeshBasicMaterial({ color: isGold ? 0xffcf3a : itemColor, depthTest: false }),
       );
       const baseY = isGold ? 0.13 : 0.22;
       mesh.position.set(it.col, baseY, it.row);

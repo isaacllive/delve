@@ -8,6 +8,16 @@
 // for rendering; this is a co-op PvE game, so hidden-geometry leakage isn't a
 // threat model here (see plan's deferred hardening note).
 
+import type { ItemKindId, ItemCategory } from './items.ts';
+
+/** One stack of carried items (a kind + how many). The client renders each by
+ *  its per-run appearance (derived from the seed) unless the kind is in the
+ *  run's `discovered` set, in which case it shows the true name. */
+export interface InvStack {
+  kindId: ItemKindId;
+  count: number;
+}
+
 /** A player's live state, as broadcast to everyone in the run. */
 export interface PlayerState {
   id: string;
@@ -32,8 +42,9 @@ export interface PlayerState {
   strength: number;
   /** Gold carried this expedition (lost on death). */
   gold: number;
-  /** Healing potions carried. */
-  potions: number;
+  /** Items carried this expedition (lost on death). Rendered by appearance
+   *  until the kind is identified. */
+  inventory: InvStack[];
   /** Facing as a compass heading in radians: 0 = North (−row), increasing
    *  clockwise (PI/2 = East). Updated from the last move direction. */
   facing: number;
@@ -74,10 +85,14 @@ export interface TrapState {
   sprung: boolean;
 }
 
-/** A loot pickup on the floor, broadcast for the viewer's floor. */
+/** A loot pickup on the floor, broadcast for the viewer's floor. The item's true
+ *  KIND is not sent — only its category — so a dropped item stays a mystery until
+ *  it's in your pack (and even then, disguised until identified). */
 export interface LootState {
   id: string;
-  kind: 'gold' | 'potion';
+  kind: 'gold' | 'item';
+  /** Item category (present when kind === 'item'), for the on-floor icon. */
+  category?: ItemCategory;
   col: number;
   row: number;
   level: number;
@@ -102,7 +117,7 @@ export type ClientMsg =
   | { t: 'join'; code: string; name: string; seed?: string; classId?: string }
   | { t: 'move'; dcol: number; drow: number }
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
-  | { t: 'use' } // quaff a healing potion
+  | { t: 'use-item'; kindId: ItemKindId } // quaff/read a carried item by kind
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
   | { t: 'chat'; text: string }
@@ -118,6 +133,8 @@ export type ServerMsg =
       monsters: MonsterState[];
       loot: LootState[];
       traps: TrapState[];
+      /** Item kinds the party has identified this run (shared knowledge). */
+      discovered: ItemKindId[];
       tick: number;
       bossDefeated: boolean;
     }

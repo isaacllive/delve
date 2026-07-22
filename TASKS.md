@@ -49,8 +49,18 @@ plan) and `docs/brogue-features.md` (mechanic selection). Roadmap phases:
   - [ ] **Retire classes → classless STR 12 / HP 30 for all** (Brogue is
         classless; classes become a possible future extension). Touches lobby /
         join flow / HUD — deferred, out of scope for the stat change.
-- [ ] **Item system** (`items.ts`): inventory, `use-item` intent, first
-      potions/scrolls; per-run identification table; enchant on gear.
+- [x] **Item system spine** (`items.ts`): pure catalog + per-run identification
+      (potions disguised as colours, scrolls as gibberish titles, shuffled from
+      the seed) + `displayName`. Inventory on `PlayerState`, `use-item` intent,
+      floor loot drops real (hidden) kinds, mystery-potion shop, shared
+      `discovered` set with use-ID + Scroll of Identify. Starter kinds whose
+      effects fit the engine: potions of **life / strength / descent**, scrolls
+      of **identify / teleportation / aggravate-monsters**. HUD inventory (press
+      1–9 or click to use). *(Deferred: Detect-Magic polarity sigil; enchant on
+      gear + Scroll of Enchanting effect — needs weapons/armor; metered item
+      generation; thrown potions — need the gas/fire sim.)*
+  - [ ] **Enchant on gear + Scroll of Enchanting** (needs weapons/armor items).
+  - [ ] **Detect Magic** polarity + metered generation; thrown/gas potions.
 - [ ] **26-depth structure + amulet win** replacing the 100-floor boss/portal.
 
 *(The items below predate the refocus and are largely on hold; several — stealth

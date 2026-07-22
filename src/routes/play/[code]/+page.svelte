@@ -94,9 +94,13 @@
       client.interact();
       return;
     }
-    if (key === 'q') {
-      e.preventDefault();
-      client.usePotion();
+    // Number keys 1–9 use the corresponding inventory slot (quaff/read).
+    if (key >= '1' && key <= '9') {
+      const slot = me?.inventory?.[Number(key) - 1];
+      if (slot) {
+        e.preventDefault();
+        client.useItem(slot.kindId);
+      }
       return;
     }
     const screen = SCREEN_DIR[key];

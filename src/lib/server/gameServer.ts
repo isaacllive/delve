@@ -18,7 +18,7 @@ import {
 import { blocksMove, cellAt, hazardAt, occluderHeight } from '../game/terrain.ts';
 import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
-import { STARTING_STRENGTH } from '../game/character.ts';
+import { STARTING_STRENGTH, potionOfLife, potionOfStrength } from '../game/character.ts';
 import {
   isUnaware,
   nextAwareness,
@@ -28,12 +28,21 @@ import {
 } from '../game/monsters.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
+  isItemKind,
   monsterReward,
   POTION_COST,
-  POTION_HEAL,
+  randomPotionKind,
   spawnLoot,
   type Loot,
 } from '../game/loot.ts';
+import { makeRng } from '../game/rng.ts';
+import {
+  displayName,
+  ITEM_KIND_BY_ID,
+  makeIdentities,
+  type ItemKindId,
+  type RunIdentities,
+} from '../game/items.ts';
 import {
   headingOf,
   MAX_CHAT_LEN,
@@ -68,6 +77,12 @@ interface Run {
   loot: Map<number, Loot[]>;
   /** Hidden traps per floor index, spawned lazily alongside monsters. */
   traps: Map<number, Trap[]>;
+  /** Per-run item appearances (disguises), derived from the seed. */
+  identities: RunIdentities;
+  /** Item kinds the party has identified this run (shared knowledge). */
+  discovered: Set<ItemKindId>;
+  /** Count of Provisioner purchases, so each mystery potion is deterministic. */
+  purchases: number;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -110,7 +125,7 @@ function toMonsterState(m: Monster, floor: number): MonsterState {
   return { id: m.id, name: m.name, color: m.color, level: floor, col: m.col, row: m.row, hp: m.hp, hpMax: m.hpMax, boss: m.boss, state: m.state };
 }
 function toLootState(l: Loot, floor: number): LootState {
-  return { id: l.id, kind: l.kind, col: l.col, row: l.row, level: floor };
+  return { id: l.id, kind: l.kind, category: l.category, col: l.col, row: l.row, level: floor };
 }
 function toTrapState(t: Trap, floor: number): TrapState {
   return { id: t.id, kind: t.kind, col: t.col, row: t.row, level: floor, sprung: t.sprung };
@@ -129,6 +144,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     // Only reveal traps that are sprung or have been spotted — armed, unnoticed
     // traps stay secret so the client can't map them out.
     traps: trapsOn(run, floor).filter((t) => t.revealed).map((t) => toTrapState(t, floor)),
+    discovered: [...run.discovered],
     bossDefeated: run.bossDefeated,
   };
 }
@@ -183,6 +199,9 @@ function joinRun(
       monsters: new Map(),
       loot: new Map(),
       traps: new Map(),
+      identities: makeIdentities(s),
+      discovered: new Set(),
+      purchases: 0,
     };
     runs.set(code, run);
   }
@@ -207,7 +226,7 @@ function joinRun(
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
     gold: 0,
-    potions: 1,
+    inventory: [],
     facing: 0, // face north — toward the camp's descent portal
     alive: true,
   };
@@ -249,6 +268,28 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
   broadcastState(run);
 }
 
+/** Add one item of a kind to a player's inventory (stacking by kind). */
+function addToInventory(st: PlayerState, kindId: ItemKindId): void {
+  const stack = st.inventory.find((s) => s.kindId === kindId);
+  if (stack) stack.count += 1;
+  else st.inventory.push({ kindId, count: 1 });
+}
+
+/** Remove one item of a kind; returns false if the player had none. */
+function removeFromInventory(st: PlayerState, kindId: ItemKindId): boolean {
+  const idx = st.inventory.findIndex((s) => s.kindId === kindId);
+  if (idx < 0) return false;
+  const stack = st.inventory[idx];
+  stack.count -= 1;
+  if (stack.count <= 0) st.inventory.splice(idx, 1);
+  return true;
+}
+
+/** How this item is named to the player right now (disguise or true name). */
+function itemLabel(run: Run, kindId: ItemKindId): string {
+  return displayName(kindId, run.identities, run.discovered);
+}
+
 /** Collect any loot on the player's current cell. */
 function collectLootHere(run: Run, player: Player): void {
   const st = player.state;
@@ -260,9 +301,9 @@ function collectLootHere(run: Run, player: Player): void {
   if (l.kind === 'gold') {
     st.gold += l.amount;
     send(player.ws, { t: 'log', text: `You pocket ${l.amount} gold.` });
-  } else {
-    st.potions += 1;
-    send(player.ws, { t: 'log', text: `You find a healing potion.` });
+  } else if (l.kindId) {
+    addToInventory(st, l.kindId);
+    send(player.ws, { t: 'log', text: `You find ${itemLabel(run, l.kindId)}.` });
   }
 }
 
@@ -422,15 +463,17 @@ function descendFromCamp(run: Run, player: Player): void {
   broadcastState(run);
 }
 
-/** Buy one healing potion from the camp Provisioner. Shared by the spatial shop
- *  interact and the hub screen's 'buy' intent. No-op unless in the camp. */
+/** Buy one sealed, UNIDENTIFIED potion from the camp Provisioner (Brogue has no
+ *  labelled shop stock — you gamble on the disguise). Deterministic per purchase
+ *  via the run's purchase counter. No-op unless in the camp. */
 function buyPotion(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive || st.level !== CAMP_DEPTH) return;
   if (st.gold >= POTION_COST) {
     st.gold -= POTION_COST;
-    st.potions += 1;
-    send(player.ws, { t: 'log', text: `Provisioner: "A potion, ${POTION_COST}g. Stay alive down there."` });
+    const kindId = randomPotionKind(`${run.seed}#shop#${run.purchases++}`);
+    addToInventory(st, kindId);
+    send(player.ws, { t: 'log', text: `Provisioner: "A sealed flask, ${POTION_COST}g. What's inside? Who knows."` });
     broadcastState(run);
   } else {
     send(player.ws, { t: 'log', text: `Provisioner: "A potion runs ${POTION_COST}g — you're short."` });
@@ -450,7 +493,7 @@ function handleInteract(run: Run, player: Player): void {
     }
     const shop = level.shops?.find((s) => cheb(st, s) <= 1);
     if (shop) {
-      // The Provisioner sells healing potions; the Smith isn't stocked yet.
+      // The Provisioner sells sealed mystery potions; the Smith isn't stocked yet.
       if (shop.name === 'Provisioner') buyPotion(run, player);
       else send(player.ws, { t: 'log', text: `${shop.name}: "Not stocked yet, delver — soon."` });
       return;
@@ -495,13 +538,98 @@ function handleInteract(run: Run, player: Player): void {
   }
 }
 
-/** Quaff a healing potion (no-op if none, dead, or already at full HP). */
-function handleUsePotion(run: Run, player: Player): void {
+/** A random walkable (non-hazard) cell on a floor — the destination for a Scroll
+ *  of Teleportation. Seeded by the tick so it varies between reads but stays
+ *  reproducible. Returns null if the floor has no open cell. */
+function randomWalkable(run: Run, level: DungeonLevel, floor: number): { col: number; row: number } | null {
+  const rng = makeRng(`${run.seed}#tp#${floor}#${run.tick}`);
+  const open: number[] = [];
+  for (let i = 0; i < level.cells.length; i++) {
+    const k = level.cells[i].kind;
+    if (k === 'floor' || k === 'ledge' || k === 'stairsUp' || k === 'stairsDown') open.push(i);
+  }
+  if (open.length === 0) return null;
+  const idx = open[rng.int(0, open.length - 1)];
+  return { col: idx % level.cols, row: Math.floor(idx / level.cols) };
+}
+
+/** Apply a used item's world effect. Returns true if it actually fired (so the
+ *  caller consumes it + identifies the kind); false to decline (e.g. a Scroll of
+ *  Identify with nothing left to reveal). Effect resolution is server-authoritative. */
+function applyItemEffect(run: Run, player: Player, kindId: ItemKindId): boolean {
   const st = player.state;
-  if (!st.alive || st.potions <= 0 || st.hp >= st.hpMax) return;
-  st.potions -= 1;
-  st.hp = Math.min(st.hpMax, st.hp + POTION_HEAL);
-  send(player.ws, { t: 'log', text: `You quaff a potion (+${POTION_HEAL} HP).` });
+  const level = getLevel(run.dungeon, st.level);
+  switch (kindId) {
+    case 'life': {
+      const { hp, hpMax } = potionOfLife(st.hpMax);
+      st.hpMax = hpMax;
+      st.hp = hp;
+      send(player.ws, { t: 'log', text: `Warmth floods you — your maximum health rises to ${hpMax}.` });
+      return true;
+    }
+    case 'strength': {
+      st.strength = potionOfStrength(st.strength);
+      send(player.ws, { t: 'log', text: `Power surges through your muscles. (Strength ${st.strength})` });
+      return true;
+    }
+    case 'descent': {
+      send(player.ws, { t: 'log', text: `The floor dissolves beneath you!` });
+      fallThrough(
+        run,
+        player,
+        level,
+        st.col,
+        st.row,
+        (n) => `You sink through the dark to level ${n + 1}.`,
+        `The floor reknits — there is nowhere deeper to fall.`,
+      );
+      return true;
+    }
+    case 'teleportation': {
+      const dest = randomWalkable(run, level, st.level);
+      if (dest) {
+        st.col = dest.col;
+        st.row = dest.row;
+        st.elevation = elevationOn(level, dest.col, dest.row);
+      }
+      send(player.ws, { t: 'log', text: `Reality folds — you blink to somewhere else on the level.` });
+      return true;
+    }
+    case 'aggravateMonsters': {
+      for (const m of monstersOn(run, st.level)) m.state = 'hunting';
+      send(player.ws, { t: 'log', text: `A shrill alarm rings out — every monster on the level is now hunting you!` });
+      return true;
+    }
+    case 'identify': {
+      // Reveal the first carried, still-unknown kind other than the scroll itself.
+      const target = st.inventory.find((s) => s.kindId !== 'identify' && !run.discovered.has(s.kindId));
+      if (target) {
+        run.discovered.add(target.kindId);
+        send(player.ws, { t: 'log', text: `The scroll reveals: ${ITEM_KIND_BY_ID[target.kindId].name}.` });
+      } else {
+        send(player.ws, { t: 'log', text: `You read the scroll of identify.` });
+      }
+      return true; // always consumed; reading also self-IDs the scroll (use-ID)
+    }
+  }
+  return false;
+}
+
+/** Use (quaff/read) one carried item by kind. Validates possession, applies the
+ *  effect, then consumes it and — via use-ID — reveals the kind to the party. */
+function handleUseItem(run: Run, player: Player, kindId: string): void {
+  const st = player.state;
+  if (!st.alive || !isItemKind(kindId)) return;
+  const stack = st.inventory.find((s) => s.kindId === kindId);
+  if (!stack || stack.count <= 0) return;
+
+  const wasUnknown = !run.discovered.has(kindId);
+  if (!applyItemEffect(run, player, kindId)) return; // declined → not consumed
+  removeFromInventory(st, kindId);
+  run.discovered.add(kindId); // use-ID: using an item teaches its kind
+  if (wasUnknown) {
+    broadcast(run, { t: 'log', text: `${st.name} learns it was ${ITEM_KIND_BY_ID[kindId].name}.` });
+  }
   broadcastState(run);
 }
 
@@ -662,8 +790,8 @@ function createWss(): WebSocketServer {
         case 'interact':
           handleInteract(run, player);
           break;
-        case 'use':
-          handleUsePotion(run, player);
+        case 'use-item':
+          handleUseItem(run, player, msg.kindId);
           break;
         case 'descend':
           descendFromCamp(run, player);
