@@ -723,7 +723,7 @@ function actMonster(
   occupied: Set<number>,
   targets: Player[],
 ): number {
-  if (m.hp <= 0) return TICKS_PER_TURN;
+  if (m.hp <= 0) return m.actionTicks;
   let best: Player | null = null;
   let bd = Infinity;
   for (const t of targets) {
@@ -734,14 +734,14 @@ function actMonster(
       best = t;
     }
   }
-  if (!best) return TICKS_PER_TURN;
+  if (!best) return m.actionTicks;
 
   // Update awareness. The boss is a fixed guardian — always hunting.
   if (!m.boss) {
     const los = hasLineOfSight(m, best.state, (c, r) => occluderHeight(level, c, r), 0, best.state.elevation);
     m.state = nextAwareness(m.state, { dist: bd, los, aggro: AGGRO });
   }
-  if (m.state === 'sleeping') return TICKS_PER_TURN; // dozing: pass the turn
+  if (m.state === 'sleeping') return m.actionTicks; // dozing: pass the turn
 
   if (bd <= 1) {
     monsterBite(run, floor, m, best);
@@ -763,7 +763,7 @@ function actMonster(
     };
     tryStep(m.col + dx, m.row + dy) || tryStep(m.col + dx, m.row) || tryStep(m.col, m.row + dy);
   }
-  return TICKS_PER_TURN;
+  return m.actionTicks;
 }
 
 /** Advance the monsters on `floor` by `elapsed` ticks (the cost of the player's
