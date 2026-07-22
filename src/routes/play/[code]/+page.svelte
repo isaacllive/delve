@@ -65,17 +65,26 @@
 
   // ── Auto-travel ───────────────────────────────────────────────────────────
   // Click a tile (or press X to auto-explore) and the client plots a route over
-  // the locally-known geometry, then streams one `move` intent per step. The
-  // server validates every step; we advance only after each move resolves (a new
-  // broadcast), and stop on arrival, a blocked step, a nearby hunting foe, or any
-  // manual key. The renderer feeds us the explored set for auto-explore targets.
+  // the locally-known geometry. The full route is drawn first (a brief beat so
+  // you SEE where you're going), then the delver walks it at a steady pace — one
+  // `move` intent every TRAVEL_STEP_MS, the server validating each. Travel stops
+  // on arrival, a blocked step, a nearby hunting foe, or any manual key. The
+  // renderer feeds us the explored set for auto-explore targets.
+  const TRAVEL_STEP_MS = 165; // pace between steps (a visible walk, not a teleport)
+  const TRAVEL_LEAD_MS = 320; // show the route this long before the first step
   let travel = $state<{ path: Step[]; i: number } | null>(null);
-  let travelSentTick = -1;
+  let travelTimer: ReturnType<typeof setTimeout> | null = null;
+  let travelSentFrom: Step | null = null;
   let explored: boolean[] | null = null;
   let exploredDepth = -99;
 
   function cancelTravel(): void {
     travel = null;
+    travelSentFrom = null;
+    if (travelTimer) {
+      clearTimeout(travelTimer);
+      travelTimer = null;
+    }
   }
 
   // Remaining route steps from the delver's current cell (drives the on-floor
@@ -99,14 +108,6 @@
     return s;
   }
 
-  function sendTravelStep(): void {
-    const m = client.me;
-    if (!travel || !m) return;
-    const s = travel.path[travel.i];
-    travelSentTick = client.tick;
-    client.move(Math.sign(s.col - m.col), Math.sign(s.row - m.row));
-  }
-
   function beginTravelTo(col: number, row: number): void {
     const m = client.me;
     if (!currentLevel || !m || !m.alive || atHub) return;
@@ -117,8 +118,42 @@
       { avoidHazards: true, blocked: armedTrapCells() },
     );
     if (!path || path.length === 0) return;
+    cancelTravel();
     travel = { path, i: 0 };
-    sendTravelStep();
+    // Draw the route now; start walking after a short lead so it's visible first.
+    travelTimer = setTimeout(walkStep, TRAVEL_LEAD_MS);
+  }
+
+  /** One paced travel step: reach-check, advance, then move toward the next cell
+   *  and reschedule. Stops on arrival, a blocked move, death, hub, or a foe. */
+  function walkStep(): void {
+    travelTimer = null;
+    const t = travel;
+    const m = client.me;
+    if (!t || !m || !m.alive || atHub) {
+      cancelTravel();
+      return;
+    }
+    // Interrupt if a foe has woken and is closing in — don't sleepwalk into it.
+    if (client.monsters.some((mo) => mo.state === 'hunting' && Math.abs(mo.col - m.col) <= 6 && Math.abs(mo.row - m.row) <= 6)) {
+      cancelTravel();
+      return;
+    }
+    const target = t.path[t.i];
+    if (m.col === target.col && m.row === target.row) {
+      if (t.i >= t.path.length - 1) {
+        cancelTravel(); // arrived
+        return;
+      }
+      t.i += 1;
+    } else if (travelSentFrom && m.col === travelSentFrom.col && m.row === travelSentFrom.row) {
+      cancelTravel(); // last move didn't take → the way is blocked
+      return;
+    }
+    const s = t.path[t.i];
+    travelSentFrom = { col: m.col, row: m.row };
+    client.move(Math.sign(s.col - m.col), Math.sign(s.row - m.row));
+    travelTimer = setTimeout(walkStep, TRAVEL_STEP_MS);
   }
 
   function autoExplore(): void {
@@ -137,35 +172,6 @@
     const sd = currentLevel?.stairsDown;
     if (sd) beginTravelTo(sd.col, sd.row);
   }
-
-  // Drive the route forward as each move resolves; stop on the stop conditions.
-  $effect(() => {
-    const tk = client.tick;
-    const t = travel;
-    const m = client.me;
-    if (!t) return;
-    if (!m || !m.alive || atHub) {
-      travel = null;
-      return;
-    }
-    // Interrupt if a foe has woken and is closing in — don't sleepwalk into it.
-    if (client.monsters.some((mo) => mo.state === 'hunting' && Math.abs(mo.col - m.col) <= 6 && Math.abs(mo.row - m.row) <= 6)) {
-      travel = null;
-      return;
-    }
-    if (tk <= travelSentTick) return; // our last move hasn't resolved yet
-    const target = t.path[t.i];
-    if (m.col === target.col && m.row === target.row) {
-      if (t.i >= t.path.length - 1) {
-        travel = null; // arrived
-        return;
-      }
-      t.i += 1;
-      sendTravelStep();
-    } else {
-      travel = null; // the step was blocked (a foe stepped in) — stop
-    }
-  });
 
   // Movement is CAMERA-RELATIVE: keys map to an on-screen heading (0 = up /
   // into the screen, clockwise), which we rotate by the camera yaw and snap to
@@ -252,6 +258,7 @@
   });
   onDestroy(() => {
     window.removeEventListener('keydown', onKey);
+    cancelTravel();
     client.disconnect();
   });
 </script>

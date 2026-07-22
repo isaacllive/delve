@@ -186,14 +186,14 @@
   const OCC_R_IN = 0.42;
   const OCC_R_OUT = 0.66;
   const OCC_SCAN = 24; // cells around the player to consider
-  // Ground/wall oculus: nearby wall blocks in a screen-disc around the delver
-  // fade too, so you see the SPACE around the character — not just a slit to
-  // them. A TIGHTER disc than the roof (walls surround you, so a wide radius
-  // would dissolve the whole view) plus a height band + small scan for perf.
-  const GROUND_OCC_SCAN = 9;
-  const GROUND_OCC_RISE = 4; // clear wall blocks up to this height above the floor
-  const GROUND_R_IN = 0.16; // NDC radius fully cleared around the delver
-  const GROUND_R_OUT = 0.3; // NDC radius the wall fade eases back to solid
+  // Ground/wall oculus: wall blocks in a screen-disc around the delver fade so
+  // you see the SPACE around the character, not just a slit to them. Sized to
+  // roughly the old roof oculus. A large fully-cleared inner disc (R_IN) with a
+  // thin easing edge keeps a big opening clean instead of a broad dither.
+  const GROUND_OCC_SCAN = 18; // cells scanned around the delver
+  const GROUND_OCC_RISE = 10; // clear wall blocks up to this height above the floor
+  const GROUND_R_IN = 0.5; // NDC radius fully cleared around the delver
+  const GROUND_R_OUT = 0.66; // NDC radius the wall fade eases back to solid
 
   // Behind-the-character follow camera. After a move, the camera azimuth eases
   // to sit behind the player (facing their heading); when idle the user can
@@ -1430,35 +1430,18 @@
       }
     }
 
-    // ── Roof (ceiling) oculus: open a soft disc of overhead rock around the
-    // delver's on-screen position so the top-down camera can always see down
-    // onto them. This is intentionally a circle (not a strict sightline test):
-    // the roof otherwise walls the camera off from the whole pocket.
+    // Delver's on-screen position (+ distance), the centre of the clear disc.
     _v3.set(meCell.col, meCell.elev + 0.7, meCell.row);
     const charDist = _v3.distanceTo(camPos);
     _v3.project(camera);
     const ccx = _v3.x, ccy = _v3.y;
-    const c0 = Math.max(0, meCell.col - OCC_SCAN);
-    const c1 = Math.min(l.cols - 1, meCell.col + OCC_SCAN);
-    const r0 = Math.max(0, meCell.row - OCC_SCAN);
-    const r1 = Math.min(l.rows - 1, meCell.row + OCC_SCAN);
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        if (l.cells[cellIndex(c, r, l.cols)].kind === 'wall') continue;
-        const idx = cellIndex(c, r, l.cols);
-        const roofY = l.cells[idx].ceiling ?? CEIL_FALLBACK;
-        // Roof only opens where it's between the camera and the character.
-        if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
-        const w = circleWeight(c, roofY, r, ccx, ccy);
-        if (w > 0) bump(occTargetCeil, idx, w);
-      }
-    }
 
-    // ── Ground/wall oculus: fade nearby WALL blocks that fall inside the same
-    // screen-disc around the delver, so the pocket of floor AROUND the character
-    // opens up — not merely a tunnel to them. Only blocks in front of the delver
-    // (closer to the camera, so no void is revealed) and within a low height band
-    // are considered; the block-level granularity carves a rounded hollow.
+    // ── Ground/wall oculus: fade WALL blocks that fall inside a screen-disc
+    // around the delver, so the pocket of floor AROUND the character opens up —
+    // not merely a tunnel to them. Only blocks in front of the delver (closer to
+    // the camera, so no void is revealed) are considered; the block-level
+    // granularity carves a rounded hollow. (The roof oculus was removed — the
+    // wall disc alone opens the view now.)
     const gc0 = Math.max(0, meCell.col - GROUND_OCC_SCAN);
     const gc1 = Math.min(l.cols - 1, meCell.col + GROUND_OCC_SCAN);
     const gr0 = Math.max(0, meCell.row - GROUND_OCC_SCAN);
@@ -1495,6 +1478,8 @@
       if (o <= 0.001 && tgt === 0) occActive.delete(b);
       else occActive.add(b);
     }
+    // The roof oculus was removed; occTargetCeil stays empty, so this only eases
+    // any still-open roof cell back to solid after the feature was dropped.
     let cChanged = false;
     for (const i of new Set([...occActiveCeil, ...occTargetCeil.keys()])) {
       const tgt = occTargetCeil.get(i) ?? 0;
