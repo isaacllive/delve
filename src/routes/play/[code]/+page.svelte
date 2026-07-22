@@ -94,6 +94,12 @@
       client.interact();
       return;
     }
+    // Rest a turn in place (the world advances, you regenerate).
+    if (key === 'z' || key === '.') {
+      e.preventDefault();
+      client.wait();
+      return;
+    }
     // Number keys 1–9 use the corresponding inventory slot (quaff/read).
     if (key >= '1' && key <= '9') {
       const slot = me?.inventory?.[Number(key) - 1];

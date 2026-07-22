@@ -13,32 +13,40 @@ export interface MonsterKind {
   id: string;
   name: string;
   hp: number;
+  /** Upper bound of the monster's bite damage (rolled as a range in combat). */
   damage: number;
+  /** Attack accuracy (Brogue units): hit chance = accuracy × 0.987^(target defense). */
+  accuracy: number;
+  /** Internal defense (displayed armor × 10) reducing an attacker's hit chance. */
+  defense: number;
   color: number;
   boss?: boolean;
 }
 
-// One or two kinds per biome tier (index = biome band).
+// One or two kinds per biome tier (index = biome band). Accuracy/defense ramp
+// with depth so unarmored delvers hit reliably early and must earn armor/enchant
+// to keep landing (and avoid) blows deeper down. These are hand-set starter
+// values; the faithful per-monster catalog (GlobalsBrogue.c) is a later port.
 const TIERS: MonsterKind[][] = [
   [
-    { id: 'rat', name: 'Cave Rat', hp: 6, damage: 2, color: 0x9a8a70 },
-    { id: 'goblin', name: 'Goblin', hp: 11, damage: 3, color: 0x7ba05a },
+    { id: 'rat', name: 'Cave Rat', hp: 6, damage: 2, accuracy: 50, defense: 0, color: 0x9a8a70 },
+    { id: 'goblin', name: 'Goblin', hp: 11, damage: 3, accuracy: 70, defense: 10, color: 0x7ba05a },
   ],
   [
-    { id: 'skeleton', name: 'Skeleton', hp: 15, damage: 4, color: 0xd8d2c0 },
-    { id: 'ghoul', name: 'Ghoul', hp: 20, damage: 5, color: 0x8a9a6a },
+    { id: 'skeleton', name: 'Skeleton', hp: 15, damage: 4, accuracy: 80, defense: 20, color: 0xd8d2c0 },
+    { id: 'ghoul', name: 'Ghoul', hp: 20, damage: 5, accuracy: 90, defense: 10, color: 0x8a9a6a },
   ],
   [
-    { id: 'imp', name: 'Cinder Imp', hp: 17, damage: 6, color: 0xff7a3a },
-    { id: 'hound', name: 'Magma Hound', hp: 24, damage: 7, color: 0xd0431a },
+    { id: 'imp', name: 'Cinder Imp', hp: 17, damage: 6, accuracy: 90, defense: 20, color: 0xff7a3a },
+    { id: 'hound', name: 'Magma Hound', hp: 24, damage: 7, accuracy: 100, defense: 20, color: 0xd0431a },
   ],
   [
-    { id: 'sentinel', name: 'Sentinel', hp: 28, damage: 7, color: 0xffd070 },
-    { id: 'wraith', name: 'Wraith', hp: 22, damage: 9, color: 0x9a7fff },
+    { id: 'sentinel', name: 'Sentinel', hp: 28, damage: 7, accuracy: 100, defense: 40, color: 0xffd070 },
+    { id: 'wraith', name: 'Wraith', hp: 22, damage: 9, accuracy: 110, defense: 20, color: 0x9a7fff },
   ],
   [
-    { id: 'horror', name: 'Horror', hp: 32, damage: 9, color: 0x7a5cff },
-    { id: 'fiend', name: 'Void Fiend', hp: 38, damage: 11, color: 0x66ff8a },
+    { id: 'horror', name: 'Horror', hp: 32, damage: 9, accuracy: 120, defense: 40, color: 0x7a5cff },
+    { id: 'fiend', name: 'Void Fiend', hp: 38, damage: 11, accuracy: 130, defense: 50, color: 0x66ff8a },
   ],
 ];
 
@@ -47,6 +55,8 @@ const BOSS: MonsterKind = {
   name: 'Warden of the Deep',
   hp: 220,
   damage: 16,
+  accuracy: 140,
+  defense: 40,
   color: 0xff2020,
   boss: true,
 };
@@ -61,22 +71,25 @@ export interface Monster {
   hp: number;
   hpMax: number;
   damage: number;
+  accuracy: number;
+  defense: number;
   boss: boolean;
   /** Awareness of the delvers — drives movement + the sneak-attack bonus. */
   state: MonsterAwareness;
+  /** Energy countdown for the turn scheduler: ticks until this monster may act
+   *  next (0 = ready). Advanced by the server as the player spends turns. */
+  ticksUntilTurn: number;
 }
 
 // ── Awareness (stealth) state machine ────────────────────────────────────────
 // Monsters begin asleep and cycle sleeping → wandering → hunting off proximity
-// and line-of-sight to the nearest delver (driven by the server tick). Attacks
-// against an *unaware* monster (sleeping or wandering) land a sneak bonus.
+// and line-of-sight to the nearest delver (driven by the turn engine). Attacks
+// against an *unaware* monster (sleeping or wandering) land a sneak bonus — the
+// multiplier itself lives in combat.ts (Brogue ×3, dagger ×5).
 
 /** How close (Chebyshev cells) a delver must be, with a clear sightline, to
  *  wake a sleeping monster straight into the hunt. */
 export const WAKE_RANGE = 5;
-
-/** Damage multiplier for striking an unaware (non-hunting) monster. */
-export const SNEAK_MULTIPLIER = 2;
 
 /** A monster is unaware (and thus sneak-attackable) unless it's hunting. */
 export function isUnaware(state: MonsterAwareness): boolean {
@@ -162,8 +175,12 @@ function makeMonster(k: MonsterKind, col: number, row: number, id: string): Mons
     hp: k.hp,
     hpMax: k.hp,
     damage: k.damage,
+    accuracy: k.accuracy,
+    defense: k.defense,
     boss: k.boss ?? false,
     // Ordinary monsters lie in wait; the boss guards its floor, always alert.
     state: k.boss ? 'hunting' : 'sleeping',
+    // Ready to act on the player's first turn (sleepers simply pass).
+    ticksUntilTurn: 0,
   };
 }

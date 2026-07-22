@@ -38,8 +38,19 @@ plan) and `docs/brogue-features.md` (mechanic selection). Roadmap phases:
       `accuracy×0.987^defense`, `1.065^netEnchant` accuracy/damage, strength
       modifier +0.25/−2.5, sneak ×3 / dagger ×5, `randClump` damage) + tests.
       Numbers ported verbatim from BrogueCE.
-- [ ] **Wire turn loop into `gameServer.ts`** — player action advances the
-      clock; monsters act via `runUntilPlayer`; retire the wall-clock interval.
+- [x] **Wire turn loop into `gameServer.ts`** — the wall-clock heartbeat is gone;
+      the game is turn-based. A player action (move / attack / use-item / **wait**)
+      costs ticks; `takeMonsterTurns` runs the floor's monsters via
+      `runUntilPlayer` (per-monster energy on `Monster.ticksUntilTurn`, so future
+      fast/slow kinds get more/fewer turns); passive HP **regeneration** over 300
+      turns. Combat now routes through `combat.ts`: player & monster **accuracy
+      rolls vs defense**, clumped enchant/strength-scaled **damage rolls**, sneak
+      ×3. Monsters gained `accuracy`/`defense` stats (hand-set ramp; faithful
+      per-kind catalog is a later port). Rest with `z` / `.`.
+  - [ ] **Per-kind monster speeds** (jackal 50, ogre attack 200) — the scheduler
+        already supports it; needs values from the monster catalog.
+  - [ ] **Player armor → defense** (monsters currently hit at raw accuracy) and
+        **weapons → accuracy/damage/enchant** (unarmed is netEnchant 0 today).
 - [x] **Strength stat + HP/STR-from-items only** — pure `character.ts` (Brogue
       baselines STR 12 / HP 30; `potionOfStrength` +1, `potionOfLife` +10 max HP
       & full heal; `healBy` cap) + tests. `strength` added to `PlayerState`,

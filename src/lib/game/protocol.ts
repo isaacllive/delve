@@ -118,6 +118,7 @@ export type ClientMsg =
   | { t: 'move'; dcol: number; drow: number }
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
   | { t: 'use-item'; kindId: ItemKindId } // quaff/read a carried item by kind
+  | { t: 'wait' } // pass a turn in place (rest)
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
   | { t: 'chat'; text: string }

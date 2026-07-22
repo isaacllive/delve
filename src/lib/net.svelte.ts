@@ -133,6 +133,10 @@ export class GameClient {
   useItem(kindId: ItemKindId): void {
     this.send({ t: 'use-item', kindId });
   }
+  /** Pass a turn in place (rest). */
+  wait(): void {
+    this.send({ t: 'wait' });
+  }
   /** Leave the out-of-dungeon hub and drop into floor 0. */
   descend(): void {
     this.send({ t: 'descend' });

@@ -23,9 +23,17 @@ import {
   isUnaware,
   nextAwareness,
   spawnMonsters,
-  SNEAK_MULTIPLIER,
   type Monster,
 } from '../game/monsters.ts';
+import { runUntilPlayer, TICKS_PER_TURN, type Scheduled } from '../game/energy.ts';
+import {
+  netEnchant,
+  rollDamage,
+  rollHit,
+  sneakMultiplier,
+  weaponAccuracy,
+  type DamageRange,
+} from '../game/combat.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -35,7 +43,7 @@ import {
   spawnLoot,
   type Loot,
 } from '../game/loot.ts';
-import { makeRng } from '../game/rng.ts';
+import { makeRng, type Rng } from '../game/rng.ts';
 import {
   displayName,
   ITEM_KIND_BY_ID,
@@ -58,9 +66,26 @@ import {
 /** Aggro range (cells) within which a monster chases a player. */
 const AGGRO = 9;
 
+// ── combat model (Brogue via combat.ts) ──────────────────────────────────────
+// Unarmed, the delver's "weapon" has a strength requirement equal to the
+// starting strength, so a fresh delver is neutral (net enchant 0 → accuracy 100)
+// and every Potion of Strength thereafter is a small, real edge. Player defense
+// is 0 until armor exists, so monsters land blows at their raw accuracy for now.
+const UNARMED_STR_REQ = STARTING_STRENGTH;
+const PLAYER_DEFENSE = 0;
+/** Turns of continuous rest for a full-health regeneration (Brogue baseline). */
+const TURNS_FOR_FULL_REGEN = 300;
+
+/** Bite/blow damage rolls as a range up to the listed value, clumped to the mean. */
+function damageRange(max: number, clumpFactor: number): DamageRange {
+  return { min: Math.max(1, Math.round(max * 0.7)), max: Math.max(1, max), clumpFactor };
+}
+
 interface Player {
   state: PlayerState;
   ws: WebSocket;
+  /** Fractional regeneration accumulator (see maybeRegen). */
+  regenAcc: number;
 }
 
 interface Run {
@@ -83,6 +108,8 @@ interface Run {
   discovered: Set<ItemKindId>;
   /** Count of Provisioner purchases, so each mystery potion is deterministic. */
   purchases: number;
+  /** Stateful RNG for live combat rolls (hit/damage). Server-only. */
+  combatRng: Rng;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -202,6 +229,7 @@ function joinRun(
       identities: makeIdentities(s),
       discovered: new Set(),
       purchases: 0,
+      combatRng: makeRng(`${s}#combat`),
     };
     runs.set(code, run);
   }
@@ -230,7 +258,7 @@ function joinRun(
     facing: 0, // face north — toward the camp's descent portal
     alive: true,
   };
-  const player: Player = { state, ws };
+  const player: Player = { state, ws, regenAcc: 0 };
   run.players.set(id, player);
   return { run, player };
 }
@@ -240,32 +268,43 @@ function monsterAt(run: Run, floor: number, col: number, row: number): Monster |
   return monstersOn(run, floor).find((m) => m.hp > 0 && m.col === col && m.row === row);
 }
 
-/** Player bump-attacks a monster. On kill, remove it, drop gold; the boss opens
- *  the exit. */
+/** Player bump-attacks a monster (Brogue combat via combat.ts): an accuracy roll
+ *  vs the monster's defense, then a clumped, enchant-/strength-scaled damage roll,
+ *  tripled against an unaware target (sneak attack). On kill, remove it + drop
+ *  gold; the boss opens the exit. Does NOT broadcast — the caller ends the turn. */
 function attackMonster(run: Run, player: Player, floor: number, m: Monster): void {
-  // Striking an unaware monster (sleeping / wandering) lands a sneak-attack
-  // bonus; the blow then wakes it (or its corpse is moot).
+  const st = player.state;
+  // Striking an unaware monster (sleeping / wandering) lands a sneak attack; the
+  // blow then wakes it regardless.
   const sneak = isUnaware(m.state);
-  const dmg = getClass(player.state.classId).attack * (sneak ? SNEAK_MULTIPLIER : 1);
+  const attack = getClass(st.classId).attack;
+  const net = netEnchant(0, st.strength, UNARMED_STR_REQ);
   m.state = 'hunting';
+
+  if (!rollHit(weaponAccuracy(net), m.defense, run.combatRng)) {
+    send(player.ws, { t: 'log', text: `You miss the ${m.name}.` });
+    return;
+  }
+  let dmg = rollDamage(damageRange(attack, 2), net, run.combatRng);
+  if (sneak) dmg *= sneakMultiplier(false);
   m.hp -= dmg;
+
   if (m.hp <= 0) {
     m.hp = 0;
     const list = run.monsters.get(floor);
     if (list) run.monsters.set(floor, list.filter((x) => x !== m));
     const reward = monsterReward(m.damage, m.boss);
-    player.state.gold += reward;
+    st.gold += reward;
     if (m.boss) {
       run.bossDefeated = true;
-      broadcast(run, { t: 'log', text: `${player.state.name} slays the ${m.name}! An exit shimmers open. (+${reward}g)` });
+      broadcast(run, { t: 'log', text: `${st.name} slays the ${m.name}! An exit shimmers open. (+${reward}g)` });
     } else {
-      const how = sneak ? 'ambush' : 'strike down';
-      send(player.ws, { t: 'log', text: `You ${how} the ${m.name}. (+${reward}g)` });
+      const how = sneak ? 'ambush' : 'slay';
+      send(player.ws, { t: 'log', text: `You ${how} the ${m.name} (−${dmg}). (+${reward}g)` });
     }
-  } else if (sneak) {
-    send(player.ws, { t: 'log', text: `You catch the ${m.name} unaware — a heavy blow!` });
+  } else {
+    send(player.ws, { t: 'log', text: `You hit the ${m.name} for ${dmg}.${sneak ? ' (ambush!)' : ''}` });
   }
-  broadcastState(run);
 }
 
 /** Add one item of a kind to a player's inventory (stacking by kind). */
@@ -319,14 +358,17 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   const nc = st.col + dx;
   const nr = st.row + dy;
 
-  // Bump-to-attack: moving into a monster strikes it instead of moving.
+  // Bump-to-attack: moving into a monster strikes it instead of moving. The
+  // strike is your turn, so the world then advances.
   const foe = monsterAt(run, st.level, nc, nr);
   if (foe) {
     attackMonster(run, player, st.level, foe);
+    endPlayerTurn(run, player);
     return;
   }
   if (blocksMove(level, nc, nr)) {
-    broadcastState(run); // still broadcast the turn-in-place
+    // Bumping a wall spends no turn (Brogue-faithful) — just re-face.
+    broadcastState(run);
     return;
   }
 
@@ -360,7 +402,8 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
     spotTraps(run, player);
     collectLootHere(run, player);
   }
-  broadcastState(run);
+  // A completed step is a turn — advance the world (monsters act, you regen).
+  endPlayerTurn(run, player);
 }
 
 /** Drop a player through a hole at (nc,nr) — a chasm or a sprung trap door — to
@@ -630,95 +673,140 @@ function handleUseItem(run: Run, player: Player, kindId: string): void {
   if (wasUnknown) {
     broadcast(run, { t: 'log', text: `${st.name} learns it was ${ITEM_KIND_BY_ID[kindId].name}.` });
   }
-  broadcastState(run);
+  // Quaffing/reading is a turn — advance the world.
+  endPlayerTurn(run, player);
 }
 
-// ── Monster AI tick ─────────────────────────────────────────────────────────
+/** Pass a turn in place (rest): the world advances, you regenerate, and nearby
+ *  monsters close in. No-op if dead. */
+function handleWait(run: Run, player: Player): void {
+  if (!player.state.alive) return;
+  endPlayerTurn(run, player);
+}
 
-/** Advance one run's monsters. Each cycles through awareness states
- *  (sleeping → wandering → hunting) off proximity + line-of-sight to the
- *  nearest delver: sleepers hold still until noticed, the aware chase and bite.
- *  Player HP hitting 0 is permadeath. */
-function tickRun(run: Run): void {
-  let changed = false;
-  const floors = new Set(
-    [...run.players.values()].filter((p) => p.state.level >= 0).map((p) => p.state.level),
-  );
-  for (const floor of floors) {
-    ensureMonsters(run, floor);
-    const level = getLevel(run.dungeon, floor);
-    const mons = monstersOn(run, floor);
-    const targets = [...run.players.values()].filter((p) => p.state.alive && p.state.level === floor);
-    if (targets.length === 0 || mons.length === 0) continue;
+// ── Turn engine (energy scheduler) ───────────────────────────────────────────
+// Time is turn-based: it advances ONLY when a delver acts. A player action costs
+// a number of ticks (a normal turn = 100); the world then runs every monster on
+// that floor whose energy comes due within that window (energy.ts). Fast monsters
+// would get extra turns, slow ones fewer — the decoupled timing Brogue is built
+// on (all current monsters act at the normal rate; per-kind speeds land with the
+// monster-catalog port).
 
-    const occ = (c: number, r: number) => occluderHeight(level, c, r);
-    const occupied = new Set(mons.map((m) => m.row * level.cols + m.col));
-    for (const m of mons) {
-      if (m.hp <= 0) continue;
-      let best: Player | null = null;
-      let bd = Infinity;
-      for (const t of targets) {
-        const d = cheb(m, t.state);
-        if (d < bd) {
-          bd = d;
-          best = t;
-        }
-      }
-      if (!best) continue;
+/** One monster bites an adjacent delver: an accuracy roll vs the player's
+ *  defense, then a clumped damage roll. Player HP reaching 0 is permadeath. */
+function monsterBite(run: Run, floor: number, m: Monster, target: Player): void {
+  const st = target.state;
+  if (!rollHit(m.accuracy, PLAYER_DEFENSE, run.combatRng)) {
+    send(target.ws, { t: 'log', text: `The ${m.name} lunges — and misses.` });
+    return;
+  }
+  const dmg = rollDamage(damageRange(m.damage, 1), 0, run.combatRng);
+  st.hp -= dmg;
+  if (st.hp <= 0 && st.alive) {
+    st.hp = 0;
+    st.alive = false;
+    broadcast(run, { t: 'log', text: `☠ ${st.name} was slain by a ${m.name} on level ${floor + 1}.` });
+  } else {
+    send(target.ws, { t: 'log', text: `The ${m.name} hits you for ${dmg}.` });
+  }
+}
 
-      // Update awareness. The boss is a fixed guardian — always hunting.
-      if (!m.boss) {
-        const los = hasLineOfSight(m, best.state, occ, 0, best.state.elevation);
-        const nextState = nextAwareness(m.state, { dist: bd, los, aggro: AGGRO });
-        if (nextState !== m.state) {
-          m.state = nextState;
-          changed = true;
-        }
-      }
-      if (m.state === 'sleeping') continue; // dozing: no move, no bite
-
-      if (bd <= 1) {
-        // Bite the adjacent delver.
-        best.state.hp -= m.damage;
-        changed = true;
-        if (best.state.hp <= 0 && best.state.alive) {
-          best.state.hp = 0;
-          best.state.alive = false;
-          broadcast(run, { t: 'log', text: `☠ ${best.state.name} was slain by a ${m.name} on level ${floor + 1}.` });
-        }
-      } else if (bd <= AGGRO) {
-        // Pursue (hunting: seen you; wandering: investigating the disturbance).
-        // Prefer the diagonal, then a single axis.
-        const dx = Math.sign(best.state.col - m.col);
-        const dy = Math.sign(best.state.row - m.row);
-        const tryStep = (cc: number, rr: number): boolean => {
-          if (cc === m.col && rr === m.row) return false;
-          if (blocksMove(level, cc, rr)) return false;
-          const key = rr * level.cols + cc;
-          if (occupied.has(key)) return false;
-          if (targets.some((t) => t.state.col === cc && t.state.row === rr)) return false;
-          occupied.delete(m.row * level.cols + m.col);
-          m.col = cc;
-          m.row = rr;
-          occupied.add(key);
-          return true;
-        };
-        if (tryStep(m.col + dx, m.row + dy) || tryStep(m.col + dx, m.row) || tryStep(m.col, m.row + dy)) {
-          changed = true;
-        }
-      }
+/** Run a single monster's turn: update awareness (sleep → wander → hunt off
+ *  proximity + line of sight to the nearest delver), then bite an adjacent
+ *  target or step toward it. Returns the ticks the action costs (its next-turn
+ *  delay). A sleeper simply passes. */
+function actMonster(
+  run: Run,
+  floor: number,
+  level: DungeonLevel,
+  m: Monster,
+  occupied: Set<number>,
+  targets: Player[],
+): number {
+  if (m.hp <= 0) return TICKS_PER_TURN;
+  let best: Player | null = null;
+  let bd = Infinity;
+  for (const t of targets) {
+    if (!t.state.alive) continue;
+    const d = cheb(m, t.state);
+    if (d < bd) {
+      bd = d;
+      best = t;
     }
   }
-  if (changed) broadcastState(run);
+  if (!best) return TICKS_PER_TURN;
+
+  // Update awareness. The boss is a fixed guardian — always hunting.
+  if (!m.boss) {
+    const los = hasLineOfSight(m, best.state, (c, r) => occluderHeight(level, c, r), 0, best.state.elevation);
+    m.state = nextAwareness(m.state, { dist: bd, los, aggro: AGGRO });
+  }
+  if (m.state === 'sleeping') return TICKS_PER_TURN; // dozing: pass the turn
+
+  if (bd <= 1) {
+    monsterBite(run, floor, m, best);
+  } else if (bd <= AGGRO) {
+    // Pursue: prefer the diagonal, then a single axis.
+    const dx = Math.sign(best.state.col - m.col);
+    const dy = Math.sign(best.state.row - m.row);
+    const tryStep = (cc: number, rr: number): boolean => {
+      if (cc === m.col && rr === m.row) return false;
+      if (blocksMove(level, cc, rr)) return false;
+      const key = rr * level.cols + cc;
+      if (occupied.has(key)) return false;
+      if (targets.some((t) => t.state.col === cc && t.state.row === rr)) return false;
+      occupied.delete(m.row * level.cols + m.col);
+      m.col = cc;
+      m.row = rr;
+      occupied.add(key);
+      return true;
+    };
+    tryStep(m.col + dx, m.row + dy) || tryStep(m.col + dx, m.row) || tryStep(m.col, m.row + dy);
+  }
+  return TICKS_PER_TURN;
 }
 
-/** Global monster-AI heartbeat, guarded so HMR doesn't stack intervals. */
-function startTicker(): void {
-  const gg = globalThis as unknown as { __delveTicker?: ReturnType<typeof setInterval> };
-  if (gg.__delveTicker) clearInterval(gg.__delveTicker);
-  gg.__delveTicker = setInterval(() => {
-    for (const run of runs.values()) tickRun(run);
-  }, 500);
+/** Advance the monsters on `floor` by `elapsed` ticks (the cost of the player's
+ *  action): each monster whose energy comes due acts, in scheduler order, until
+ *  the player's next turn arrives. The player is a placeholder actor at index 0
+ *  so `runUntilPlayer` stops once `elapsed` has passed. */
+function takeMonsterTurns(run: Run, floor: number, elapsed: number): void {
+  if (floor < 0) return; // camp is safe
+  ensureMonsters(run, floor);
+  const level = getLevel(run.dungeon, floor);
+  const monsters = monstersOn(run, floor).filter((m) => m.hp > 0);
+  const targets = [...run.players.values()].filter((p) => p.state.alive && p.state.level === floor);
+  if (monsters.length === 0 || targets.length === 0) return;
+
+  const occupied = new Set(monsters.map((m) => m.row * level.cols + m.col));
+  const playerProxy: Scheduled = { ticksUntilTurn: elapsed };
+  const actors: Scheduled[] = [playerProxy, ...monsters];
+  runUntilPlayer(actors, 0, (i) => actMonster(run, floor, level, monsters[i - 1], occupied, targets));
+}
+
+/** Passive regeneration: a delver heals `maxHP` over TURNS_FOR_FULL_REGEN turns
+ *  of rest. Accumulated fractionally so small maxHP still heals eventually. */
+function maybeRegen(player: Player): void {
+  const st = player.state;
+  if (!st.alive || st.hp >= st.hpMax) {
+    player.regenAcc = 0;
+    return;
+  }
+  player.regenAcc += st.hpMax;
+  while (player.regenAcc >= TURNS_FOR_FULL_REGEN && st.hp < st.hpMax) {
+    st.hp += 1;
+    player.regenAcc -= TURNS_FOR_FULL_REGEN;
+  }
+}
+
+/** End a player's turn: the action is done, so the world advances by its tick
+ *  cost (monsters on the delver's floor act), the delver regenerates, and the
+ *  new state is broadcast. Transitions (stairs/portals/camp) do NOT call this —
+ *  they broadcast directly, since you're leaving the floor. */
+function endPlayerTurn(run: Run, player: Player, cost: number = TICKS_PER_TURN): void {
+  takeMonsterTurns(run, player.state.level, cost);
+  maybeRegen(player);
+  broadcastState(run);
 }
 
 /** Attach the game WebSocket server to an HTTP server (dev, preview, or prod).
@@ -734,7 +822,8 @@ export function attachGameWSS(httpServer: HttpServer): WebSocketServer {
   if (marked.__delveWss) return marked.__delveWss;
   const wss = createWss();
   marked.__delveWss = wss;
-  startTicker();
+  // No wall-clock heartbeat: the game is turn-based. Monsters act only when a
+  // delver spends a turn (see endPlayerTurn / takeMonsterTurns).
   httpServer.on('upgrade', (req, socket, head) => {
     let pathname: string;
     try {
@@ -792,6 +881,9 @@ function createWss(): WebSocketServer {
           break;
         case 'use-item':
           handleUseItem(run, player, msg.kindId);
+          break;
+        case 'wait':
+          handleWait(run, player);
           break;
         case 'descend':
           descendFromCamp(run, player);
