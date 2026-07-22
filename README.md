@@ -25,6 +25,11 @@ VTT** (`../realm-quest-vtt`) — see the header comments in `src/lib/game/los.ts
 
 ## Run it
 
+Requires **Node 20.19+ or 22.12+** (the Vite 8 / rolldown toolchain uses
+`node:util`'s `styleText`, added in Node 20.12/22.0 — older Node crashes on
+startup). `.nvmrc` pins 22; run `nvm use` if you use nvm. `engine-strict` is
+on, so `npm install` fails fast with a clear message on an unsupported Node.
+
 ```sh
 npm install
 npm run dev        # http://localhost:5173
