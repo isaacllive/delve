@@ -29,7 +29,8 @@ export type ItemKindId =
   // scrolls
   | 'identify'
   | 'teleportation'
-  | 'aggravateMonsters';
+  | 'aggravateMonsters'
+  | 'enchanting';
 
 /** Whether an item is beneficial or harmful to use blind — the axis a future
  *  Scroll/Potion of Detect Magic reveals. */
@@ -89,6 +90,17 @@ export const ITEM_KINDS: readonly ItemKind[] = [
     name: 'scroll of aggravate monsters',
     polarity: 'bad',
     desc: 'A blaring alarm wakes and enrages every monster on the level.',
+  },
+  {
+    // The enchant economy's one currency: read it on a weapon or armor to raise
+    // its enchant level by 1 (and lower its strength requirement by 1). The
+    // effect on a chosen gear instance lives in gear.ts (`enchantItem`); this
+    // entry makes it part of the identification game like every other scroll.
+    id: 'enchanting',
+    category: 'scroll',
+    name: 'scroll of enchanting',
+    polarity: 'good',
+    desc: 'Infuses a weapon or suit of armor with magic, raising its power and easing its strength requirement.',
   },
 ] as const;
 
