@@ -799,13 +799,34 @@ function maybeRegen(player: Player): void {
   }
 }
 
-/** End a player's turn: the action is done, so the world advances by its tick
- *  cost (monsters on the delver's floor act), the delver regenerates, and the
- *  new state is broadcast. Transitions (stairs/portals/camp) do NOT call this —
- *  they broadcast directly, since you're leaving the floor. */
+/** Context handed to each per-turn world system. */
+interface TurnContext {
+  run: Run;
+  player: Player;
+  /** Ticks the player's action cost — the amount of time that elapses. */
+  cost: number;
+}
+
+/** A per-turn world system: one slice of "what happens when time passes".
+ *  Extension seam — new time-based systems (terrain spread, hunger drain,
+ *  status-effect decay, scent diffusion) register here as one line each, instead
+ *  of being woven into `endPlayerTurn`. Systems run in order, before the state
+ *  broadcast. */
+type WorldSystem = (ctx: TurnContext) => void;
+
+const WORLD_SYSTEMS: WorldSystem[] = [
+  // Monsters on the delver's floor act, spending the elapsed time.
+  ({ run, player, cost }) => takeMonsterTurns(run, player.state.level, cost),
+  // The delver regenerates a sliver of health.
+  ({ player }) => maybeRegen(player),
+];
+
+/** End a player's turn: the action is done, so time passes — every world system
+ *  runs, then the new state is broadcast. Transitions (stairs/portals/camp) do
+ *  NOT call this — they broadcast directly, since you're leaving the floor. */
 function endPlayerTurn(run: Run, player: Player, cost: number = TICKS_PER_TURN): void {
-  takeMonsterTurns(run, player.state.level, cost);
-  maybeRegen(player);
+  const ctx: TurnContext = { run, player, cost };
+  for (const system of WORLD_SYSTEMS) system(ctx);
   broadcastState(run);
 }
 
@@ -835,6 +856,44 @@ export function attachGameWSS(httpServer: HttpServer): WebSocketServer {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
   return wss;
+}
+
+// ── Intent registry ──────────────────────────────────────────────────────────
+// Post-join client intents → their authoritative handlers. Extension seam: a new
+// intent is declared in protocol.ts and registered here as ONE entry, instead of
+// growing a switch. ('join' is handled separately, before a player exists.)
+
+interface IntentContext {
+  run: Run;
+  player: Player;
+}
+type IntentHandler<K extends ClientMsg['t']> = (ctx: IntentContext, msg: Extract<ClientMsg, { t: K }>) => void;
+type IntentRegistry = { [K in ClientMsg['t']]?: IntentHandler<K> };
+
+const INTENTS: IntentRegistry = {
+  move: ({ run, player }, msg) => handleMove(run, player, msg.dcol, msg.drow),
+  interact: ({ run, player }) => handleInteract(run, player),
+  'use-item': ({ run, player }, msg) => handleUseItem(run, player, msg.kindId),
+  wait: ({ run, player }) => handleWait(run, player),
+  descend: ({ run, player }) => descendFromCamp(run, player),
+  // Only the potion shop is stocked; guard the item so an unknown value can't be honoured.
+  buy: ({ run, player }, msg) => {
+    if (msg.item === 'potion') buyPotion(run, player);
+  },
+  chat: ({ run, player }, msg) => {
+    const text = String(msg.text || '').slice(0, MAX_CHAT_LEN).trim();
+    if (text) broadcast(run, { t: 'chat', from: player.state.id, name: player.state.name, text, at: Date.now() });
+  },
+  ping: ({ player }) => send(player.ws, { t: 'pong' }),
+};
+
+/** Route one post-join intent to its registered handler (no-op for an unknown or
+ *  unregistered message type). The cast bridges the runtime discriminant to the
+ *  per-variant handler; each handler body is still type-checked against its
+ *  specific message shape via the registry's mapped type. */
+function dispatchIntent(run: Run, player: Player, msg: ClientMsg): void {
+  const handler = INTENTS[msg.t] as ((ctx: IntentContext, msg: ClientMsg) => void) | undefined;
+  handler?.({ run, player }, msg);
 }
 
 /** Build the singleton WebSocketServer (noServer: we drive handleUpgrade
@@ -871,37 +930,7 @@ function createWss(): WebSocketServer {
         return;
       }
 
-      const { run, player } = joined;
-      switch (msg.t) {
-        case 'move':
-          handleMove(run, player, msg.dcol, msg.drow);
-          break;
-        case 'interact':
-          handleInteract(run, player);
-          break;
-        case 'use-item':
-          handleUseItem(run, player, msg.kindId);
-          break;
-        case 'wait':
-          handleWait(run, player);
-          break;
-        case 'descend':
-          descendFromCamp(run, player);
-          break;
-        case 'buy':
-          // Only the potion shop is stocked; guard the item so an unknown value
-          // can't be honoured.
-          if (msg.item === 'potion') buyPotion(run, player);
-          break;
-        case 'chat': {
-          const text = String(msg.text || '').slice(0, MAX_CHAT_LEN).trim();
-          if (text) broadcast(run, { t: 'chat', from: player.state.id, name: player.state.name, text, at: Date.now() });
-          break;
-        }
-        case 'ping':
-          send(ws, { t: 'pong' });
-          break;
-      }
+      dispatchIntent(joined.run, joined.player, msg);
     });
 
     ws.on('close', () => {
