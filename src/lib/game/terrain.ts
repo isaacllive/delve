@@ -17,6 +17,8 @@ export type TerrainKind =
   | 'water'
   | 'ledge'
   | 'grass'
+  | 'gate' // a vault portcullis: blocks movement (until a lever opens it), but
+  // you can see through the bars to the reward behind
   | 'stairsDown'
   | 'stairsUp';
 
@@ -87,7 +89,9 @@ export function cellAt(level: Level, col: number, row: number): TerrainCell | un
 export function blocksMove(level: Level, col: number, row: number): boolean {
   const c = cellAt(level, col, row);
   if (!c) return true;
-  return c.kind === 'wall';
+  // A closed vault gate blocks like a wall; the server swaps it to floor when its
+  // lever is pulled, so passage opens up without any special-case here.
+  return c.kind === 'wall' || c.kind === 'gate';
 }
 
 /** Occluder height at a cell for sight. 0 == not an occluder. Walls stand

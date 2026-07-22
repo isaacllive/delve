@@ -35,6 +35,8 @@ export class GameClient {
   bossDefeated = $state(false);
   /** True once the Amulet of Yendor has been claimed — escape upward to win. */
   hasAmulet = $state(false);
+  /** Depths whose guardian-vault gate has been opened. */
+  openVaults = $state<number[]>([]);
   /** Set to the winner's name when someone completes the run. */
   won = $state<string | null>(null);
 
@@ -102,6 +104,7 @@ export class GameClient {
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
         this.hasAmulet = msg.hasAmulet;
+        this.openVaults = msg.openVaults;
         break;
       case 'chat':
         this.pushChat({ name: msg.name, text: msg.text, at: msg.at });

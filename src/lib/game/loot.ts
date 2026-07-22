@@ -134,6 +134,20 @@ export function spawnLoot(seed: string, level: DungeonLevel): Loot[] {
       category: 'scroll',
     });
   }
+
+  // Guardian-vault reward: a guaranteed Scroll of Enchanting sealed behind the
+  // portcullis (the gear half is added by spawnGear on the same cell).
+  if (level.vault) {
+    out.push({
+      id: `${level.depth}-vault`,
+      kind: 'item',
+      col: level.vault.reward.col,
+      row: level.vault.reward.row,
+      amount: 0,
+      kindId: 'enchanting',
+      category: 'scroll',
+    });
+  }
   return out;
 }
 
@@ -184,6 +198,20 @@ export function spawnGear(seed: string, level: DungeonLevel): GearDrop[] {
       gearCategory: kind.category,
       gearKindId: kind.id,
       enchantLevel: rng.chance(PRE_ENCHANT_CHANCE) ? 1 : 0,
+    });
+  }
+
+  // Guardian-vault reward: a guaranteed (often pre-enchanted) piece of gear on
+  // the reward cell, alongside the vault's Scroll of Enchanting (see spawnLoot).
+  if (level.vault) {
+    const kind = rng.chance(0.5) ? rng.pick(WEAPONS) : rng.pick(ARMORS);
+    out.push({
+      id: `${level.depth}-vaultgear`,
+      col: level.vault.reward.col,
+      row: level.vault.reward.row,
+      gearCategory: kind.category,
+      gearKindId: kind.id,
+      enchantLevel: rng.chance(0.6) ? 1 : 0,
     });
   }
   return out;

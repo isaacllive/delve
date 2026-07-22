@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateDungeon, getLevel, type Dungeon, type DungeonLevel } from './dungeon.ts';
-import { cellAt } from './terrain.ts';
+import { cellAt, blocksMove } from './terrain.ts';
 
 /** BFS over all non-wall cells from the level entry; returns the count reached. */
 function reachableFrom(level: DungeonLevel, start: { col: number; row: number }): number {
@@ -47,6 +47,29 @@ describe('generateDungeon (lazy, biome-aware)', () => {
   it('caches floors — repeated getLevel returns the same object', () => {
     const d = generateDungeon('cache');
     expect(getLevel(d, 5)).toBe(getLevel(d, 5));
+  });
+
+  it('builds a sealed guardian vault on some room-biome floors', () => {
+    // Scan the room biomes (Ruins 5–9, Ancient City 15–19) for at least one vault
+    // and verify its structure: a gate cell that blocks, and a floor lever.
+    const d = generateDungeon('vault-seed');
+    let found = false;
+    for (const depth of [5, 6, 7, 8, 9, 15, 16, 17, 18, 19]) {
+      const lvl = getLevel(d, depth);
+      if (!lvl.vault) continue;
+      found = true;
+      const { gate, lever, reward } = lvl.vault;
+      // The gate is a portcullis that blocks movement…
+      expect(lvl.cells[gate.row * lvl.cols + gate.col].kind).toBe('gate');
+      expect(blocksMove(lvl, gate.col, gate.row)).toBe(true);
+      // …the lever and reward sit on walkable floor, distinct from the gate.
+      expect(lvl.cells[lever.row * lvl.cols + lever.col].kind).toBe('floor');
+      expect(blocksMove(lvl, reward.col, reward.row)).toBe(false);
+      expect(`${gate.col},${gate.row}`).not.toBe(`${lever.col},${lever.row}`);
+    }
+    expect(found).toBe(true);
+    // Cave biomes never carry vaults (they have no rooms).
+    expect(getLevel(d, 0).vault).toBeUndefined();
   });
 
   it('places a commutation altar on eligible mid-run floors only', () => {

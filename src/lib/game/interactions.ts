@@ -34,10 +34,17 @@ export function interactablePrompt(
   bossDefeated: boolean,
   levelCount: number,
   hasAmulet = false,
+  vaultOpen = false,
 ): InteractPrompt | null {
   // Commutation altar (a machine) — swap equipped weapon/armor enchant.
   if (level.altar && level.altar.col === col && level.altar.row === row) {
     return { key: INTERACT_KEY, label: 'Commute: swap weapon & armor enchant' };
+  }
+
+  // Guardian-vault lever — pull it to raise the portcullis (nothing to do once
+  // it's already open).
+  if (level.vault && level.vault.lever.col === col && level.vault.lever.row === row) {
+    return vaultOpen ? null : { key: INTERACT_KEY, label: 'Pull the lever — open the vault' };
   }
 
   // The Amulet of Yendor (deepest floor, on the boss's dais). Guarded until the

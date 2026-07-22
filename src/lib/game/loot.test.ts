@@ -32,10 +32,12 @@ describe('loot', () => {
 
   it('meters a guaranteed Scroll of Enchanting onto every third floor', () => {
     const d = generateDungeon('ench-seed');
-    // Depths where depth % 3 === 2 (2, 5, 8, …) always yield one enchant scroll.
+    // Depths where depth % 3 === 2 (2, 5, 8, …) always yield the metered enchant
+    // scroll (a vault, if present, may add another — so match the metered id).
     for (const depth of [2, 5, 8]) {
-      const scrolls = spawnLoot(d.seed, getLevel(d, depth)).filter((l) => l.kindId === 'enchanting');
-      expect(scrolls.length).toBe(1);
+      const metered = spawnLoot(d.seed, getLevel(d, depth)).filter((l) => l.id === `${depth}-ench`);
+      expect(metered.length).toBe(1);
+      expect(metered[0].kindId).toBe('enchanting');
     }
     // Off-cadence floors get no *guaranteed* enchant scroll from metering.
     const off = spawnLoot(d.seed, getLevel(d, 3)).filter((l) => l.id.endsWith('-ench'));

@@ -23,7 +23,7 @@ import {
   type TerrainKind,
 } from './terrain.ts';
 import { makeRng, type Rng } from './rng.ts';
-import { generateRoomLevel } from './roomgen.ts';
+import { generateRoomLevel, type Room } from './roomgen.ts';
 
 // Architectural biomes are carved with the room-accretion generator (roomgen.ts)
 // instead of cellular-automata caves — Ruins and the Ancient City read as built
@@ -44,6 +44,10 @@ export interface DungeonLevel extends Level {
   /** Commutation altar location (some floors) — a machine that swaps the enchant
    *  of the player's equipped weapon and armor. One use per altar. */
   altar?: { col: number; row: number };
+  /** A guardian vault (some room-biome floors): a reward sealed behind a
+   *  portcullis `gate`, opened by pulling the `lever`. `reward` marks the
+   *  guaranteed loot inside. */
+  vault?: { gate: { col: number; row: number }; lever: { col: number; row: number }; reward: { col: number; row: number } };
   /** Boss location (bottom floor only). */
   boss?: { col: number; row: number };
   /** Exit-portal location (bottom floor only; same cell as the boss). */
@@ -309,10 +313,12 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
   let entryIdx: number;
   let downIdx: number;
   let rng: Rng;
+  let rooms: Room[] | null = null;
 
   if (usesRoomGen(depth, isLast)) {
     const rl = generateRoomLevel(seed, depth, { cols, rows, levelCount });
     cells = rl.cells;
+    rooms = rl.rooms;
     region = new Set<number>();
     for (let i = 0; i < cells.length; i++) if (cells[i].kind !== 'wall') region.add(i);
     const up = rl.stairsUp ?? rl.entry;
@@ -349,6 +355,50 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
   const stairsDown = isLast ? undefined : { col: downIdx % cols, row: Math.floor(downIdx / cols) };
 
   const reserved = new Set<number>([entryIdx, downIdx]);
+
+  // Guardian vault (room biomes only): seal a dead-end room behind a portcullis
+  // opened by a lever, with a guaranteed reward inside. Built before decoration
+  // so its cells are reserved from terrain blobs.
+  let vault: DungeonLevel['vault'];
+  if (rooms) {
+    const roomOf = (idx: number) => rooms!.find((rm) => rm.cells.includes(idx));
+    const entryRoom = roomOf(entryIdx);
+    const downRoom = roomOf(downIdx);
+    // A good vault is a one-door dead-end that isn't the seed room, the entry, or
+    // the stairs room — sealing it can't cut off the critical path.
+    const candidates = rooms.filter(
+      (rm) => rm.doors.length === 1 && rm.id !== 0 && rm.id !== entryRoom?.id && rm.id !== downRoom?.id,
+    );
+    if (candidates.length > 0) {
+      const vroom = candidates[rng.int(0, candidates.length - 1)];
+      const door = vroom.doors[0];
+      const gateIdx = cellIndex(door.col, door.row, cols);
+      // Lever sits just OUTSIDE the door (opposite the direction into the room).
+      const leverCol = door.col - door.dir.col;
+      const leverRow = door.row - door.dir.row;
+      const leverIdx = cellIndex(leverCol, leverRow, cols);
+      // Reward on a floor cell inside the room (prefer its centre).
+      const centerIdx = cellIndex(vroom.center.col, vroom.center.row, cols);
+      const rewardIdx =
+        cells[centerIdx]?.kind === 'floor' && centerIdx !== gateIdx
+          ? centerIdx
+          : (vroom.cells.find((i) => i !== gateIdx && cells[i]?.kind === 'floor') ?? centerIdx);
+      // Only build it if the lever lands on a real, distinct floor cell.
+      if (cells[leverIdx]?.kind === 'floor' && leverIdx !== gateIdx && leverIdx !== rewardIdx) {
+        cells[gateIdx] = makeCell('gate');
+        region.delete(gateIdx); // no longer walkable floor for decoration/spawns
+        reserved.add(gateIdx);
+        reserved.add(leverIdx);
+        reserved.add(rewardIdx);
+        vault = {
+          gate: { col: door.col, row: door.row },
+          lever: { col: leverCol, row: leverRow },
+          reward: { col: rewardIdx % cols, row: Math.floor(rewardIdx / cols) },
+        };
+      }
+    }
+  }
+
   decorate(cells, region, cols, reserved, sb, rng);
 
   if (stairsUp) cells[entryIdx] = makeCell('stairsUp');
@@ -408,6 +458,7 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
     palette: sb.palette,
     biomeName: biome,
     altar,
+    vault,
     subBiomeName: sb.name,
     boss,
     exit,

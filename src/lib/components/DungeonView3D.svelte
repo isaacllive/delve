@@ -33,6 +33,7 @@
     loot = [],
     traps = [],
     hazards = [],
+    vaultOpen = false,
     youId,
     tick,
     bossDefeated = false,
@@ -59,6 +60,8 @@
     loot?: LootState[];
     traps?: TrapState[];
     hazards?: HazardCell[];
+    /** Whether this floor's guardian-vault gate has been opened. */
+    vaultOpen?: boolean;
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
@@ -1141,6 +1144,28 @@
     // Exit portal on the bottom floor, once the boss has fallen.
     if (level.exit && bossDefeated) {
       addPortal(level.exit, 0x8affff);
+    }
+
+    // Guardian vault: a portcullis (bars, until the lever is pulled) + the lever.
+    if (level.vault) {
+      const v = level.vault;
+      if (!vaultOpen) {
+        const bars = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 1.6, 0.14),
+          new THREE.MeshBasicMaterial({ color: 0x6a6e78, depthTest: false }),
+        );
+        bars.position.set(v.gate.col, 0.8, v.gate.row);
+        bars.renderOrder = 13;
+        avatarGroup.add(bars);
+      }
+      const lever = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.5, 0.12),
+        new THREE.MeshBasicMaterial({ color: vaultOpen ? 0x8affa0 : 0xd8b45a, depthTest: false }),
+      );
+      lever.position.set(v.lever.col, 0.32, v.lever.row);
+      lever.rotation.z = vaultOpen ? 0.7 : -0.7; // thrown vs set
+      lever.renderOrder = 13;
+      avatarGroup.add(lever);
     }
 
     // Commutation altar — a low glowing pedestal you can activate.

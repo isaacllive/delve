@@ -15,7 +15,7 @@ import {
   type Dungeon,
   type DungeonLevel,
 } from '../game/dungeon.ts';
-import { blocksMove, cellAt, hazardAt, occluderHeight } from '../game/terrain.ts';
+import { blocksMove, cellAt, hazardAt, makeCell, occluderHeight } from '../game/terrain.ts';
 import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
 import {
@@ -149,6 +149,8 @@ interface Run {
   summonCd: Map<string, number>;
   /** Depths whose commutation altar has already been spent (one use each). */
   usedAltars: Set<number>;
+  /** Depths whose guardian-vault gate has been opened (lever pulled). */
+  openVaults: Set<number>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -254,6 +256,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     discovered: [...run.discovered],
     bossDefeated: run.bossDefeated,
     hasAmulet: run.hasAmulet,
+    openVaults: [...run.openVaults],
   };
 }
 
@@ -317,6 +320,7 @@ function joinRun(
       combatRng: makeRng(`${s}#combat`),
       summonCd: new Map(),
       usedAltars: new Set(),
+      openVaults: new Set(),
     };
     runs.set(code, run);
   }
@@ -794,6 +798,21 @@ function handleInteract(run: Run, player: Player): void {
   // Commutation altar (a machine) — swap equipped weapon/armor enchant.
   if (level.altar && st.col === level.altar.col && st.row === level.altar.row) {
     commuteAltar(run, player);
+    return;
+  }
+
+  // Guardian-vault lever — pull it to raise the portcullis and reach the reward.
+  if (level.vault && st.col === level.vault.lever.col && st.row === level.vault.lever.row) {
+    if (run.openVaults.has(st.level)) {
+      send(player.ws, { t: 'log', text: `The lever is already thrown; the gate stands open.` });
+    } else {
+      run.openVaults.add(st.level);
+      // Raise the portcullis on the SERVER's level copy so movement opens up.
+      const gate = level.vault.gate;
+      level.cells[gate.row * level.cols + gate.col] = makeCell('floor');
+      broadcast(run, { t: 'log', text: `${st.name} throws the lever — a portcullis grinds open.` });
+      broadcastState(run);
+    }
     return;
   }
 
