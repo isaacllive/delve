@@ -95,6 +95,9 @@
   let voxDirty = false; // light/alpha changed → re-upload next frame
   let avatarGroup: import('three').Group | null = null;
   let torchLights: import('three').PointLight[] = [];
+  // Loot meshes registered for a slow spin/bob so treasure catches the eye at
+  // the game's shallow camera angle. Rebuilt each refreshAvatars.
+  let lootSpin: import('three').Mesh[] = [];
   // Procedural-figure toolkit (built once THREE loads) + a template cache. Each
   // distinct (modelId, tint) is built ONCE into a lit Group; per-instance
   // avatars are cheap clones sharing that geometry/material. Clones are tagged
@@ -198,7 +201,7 @@
 
   // Close, third-person-ish camera that pivots around the character (the
   // OrbitControls target follows the player, so dragging orbits around them).
-  const CAM_OFFSET = { x: 0, y: 8, z: 6.5 };
+  const CAM_OFFSET = { x: 0, y: 5, z: 6.5 };
   const camTarget = { x: 0, y: 0, z: 0 };
   // Oculus = the opening punched in the roof above each delver; the ceiling
   // dome extends CEIL_R out from each player and fades into the dark at its
@@ -235,7 +238,7 @@
   // roof up to VOX_TOP; walls are solid the whole column. The air pocket
   // between the floor and the roof is where you explore.
   const VOX_BASE = -3; // bottom of the floor rock mass
-  const VOX_TOP = 9; // top of the roof rock mass (above the tallest ceiling)
+  const VOX_TOP = 15; // top of the roof rock mass (above the tallest ceiling)
 
   /** [bottom, top] extents of a cell's GROUND block: the solid floor mass up to
    *  the walkable surface (`elevation`), or the full solid column for a wall. */
@@ -345,16 +348,27 @@
     // vertexColors → the baked per-face shading; instanceColor (per cell) and
     // instanceAlpha (occlusion fade) multiply on top in the shader. An optional
     // `map` adds the neutral rock tile detail (multiplied on top of all three).
-    const m = new THREE.MeshBasicMaterial({ transparent: true, vertexColors: true, map: map ?? null });
+    //
+    // Occluder cutout uses HASHED alpha (dithered discard), not blended
+    // transparency. Blended transparency would keep the mesh in the transparent
+    // pass while still writing depth, so a faded-out wall cell would occlude the
+    // cells *behind* it in the depth buffer — revealing the void background
+    // instead of the deeper rock. Hashed alpha keeps the mesh opaque: discarded
+    // (faded) fragments write no depth, so whatever stands behind them renders
+    // normally, while solid cells (instanceAlpha 1) always pass and stay opaque.
+    const m = new THREE.MeshBasicMaterial({ vertexColors: true, map: map ?? null });
+    m.alphaHash = true;
     m.onBeforeCompile = (shader) => {
       shader.vertexShader =
         'attribute float instanceAlpha;\nvarying float vAlpha;\n' +
         shader.vertexShader.replace('void main() {', 'void main() {\n\tvAlpha = instanceAlpha;');
+      // Fold the per-cell fade into diffuseColor.a *before* the hashed-alpha
+      // discard reads it, so a low alpha dithers the cell away (and skips depth).
       shader.fragmentShader =
         'varying float vAlpha;\n' +
         shader.fragmentShader.replace(
-          '#include <opaque_fragment>',
-          '\tdiffuseColor.a *= vAlpha;\n#include <opaque_fragment>',
+          '#include <alphahash_fragment>',
+          '\tdiffuseColor.a *= vAlpha;\n#include <alphahash_fragment>',
         );
     };
     return m;
@@ -782,6 +796,7 @@
     // below so the animate loop keeps easing each delver's heading. faceVis
     // persists (keyed by id) so a rebuilt figure resumes mid-turn, not snapped.
     turners = [];
+    lootSpin = [];
     // Free throwaway primitives (rings, arrows, loot, fallback shapes) but keep
     // the cached figure geometry/materials that clones share (userData.shared).
     while (avatarGroup.children.length) {
@@ -820,18 +835,27 @@
       }
     }
 
-    // Loot: gold coins (yellow discs) and potions (red vials).
+    // Loot: gold piles (tapered coin mounds) and potions (standing vials). Gold
+    // used to be a flat 0.08-thick disc lying on the floor, which foreshortened
+    // to an invisible sliver at the game's low camera angle — a mound stands
+    // proud instead. Both are registered for a spin/bob (see animate) so they
+    // glint and are easy to spot; depthTest off keeps them from being lost in
+    // uneven rock.
     for (const it of loot) {
       const isGold = it.kind === 'gold';
       const mesh = new THREE.Mesh(
         isGold
-          ? new THREE.CylinderGeometry(0.18, 0.18, 0.08, 12)
+          ? new THREE.CylinderGeometry(0.11, 0.2, 0.2, 16)
           : new THREE.CylinderGeometry(0.1, 0.14, 0.32, 8),
         new THREE.MeshBasicMaterial({ color: isGold ? 0xffcf3a : 0xff5a7a, depthTest: false }),
       );
-      mesh.position.set(it.col, isGold ? 0.14 : 0.22, it.row);
+      const baseY = isGold ? 0.13 : 0.22;
+      mesh.position.set(it.col, baseY, it.row);
       mesh.renderOrder = 14;
+      mesh.userData.baseY = baseY;
+      mesh.userData.spin = isGold; // spin gold; vials only bob
       avatarGroup.add(mesh);
+      lootSpin.push(mesh);
     }
 
     // Base-camp props: a descent portal + shop stalls.
@@ -976,6 +1000,13 @@
     lastFrame = now;
     stepFades(dt);
     syncVoxelTerrain();
+    // Bob (and, for gold, spin) loot so treasure glints and reads from the
+    // shallow camera angle. Phase-offset by cell so nearby items aren't synced.
+    for (const m of lootSpin) {
+      const baseY = m.userData.baseY as number;
+      m.position.y = baseY + Math.sin(now / 400 + m.position.x + m.position.z) * 0.05;
+      if (m.userData.spin) m.rotation.y += dt * 1.6;
+    }
     // Pan the camera position by however much the follow-target moved, so the
     // rig travels with the player while keeping the user's orbit/zoom offset.
     if (camInit) {

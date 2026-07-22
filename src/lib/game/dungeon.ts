@@ -250,8 +250,8 @@ function computeCeilings(cells: TerrainCell[], cols: number, rows: number, depth
       const bump = (n * 2 - 1) * BUMP_AMP;
       const gap = Math.max(CEIL_MIN - 0.3, Math.min(CEIL_MAX + BUMP_AMP, gapBase + bump));
       // Quantize to integer voxel steps (blocky roof), clamped to keep headroom
-      // above the floor and stay below the top of the rock volume.
-      cells[i].ceiling = Math.min(8, Math.max(floorRef + 2, Math.round(floorRef + gap)));
+      // above the floor and stay below the top of the rock volume (VOX_TOP).
+      cells[i].ceiling = Math.min(12, Math.max(floorRef + 2, Math.round(floorRef + gap)));
     }
   }
 }

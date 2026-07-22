@@ -37,8 +37,8 @@ export interface TerrainCell {
 export const WALL_HEIGHT = 7.5;
 /** Roof height range (world-Y) for the generated cave ceiling. Tall + varied
  *  so chambers feel cavernous; the roof still arches down to the walls. */
-export const CEIL_MIN = 3.5;
-export const CEIL_MAX = 6.8;
+export const CEIL_MIN = 4.5;
+export const CEIL_MAX = 11;
 /** Default height a raised ledge/platform stands. */
 export const LEDGE_HEIGHT = 1;
 /** Depth of an open pit / chasm (negative elevation). */
