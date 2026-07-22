@@ -3,6 +3,7 @@
   import { compassLabel } from '$lib/game/protocol.ts';
   import { getClass } from '$lib/game/classes.ts';
   import type { InteractPrompt } from '$lib/game/interactions.ts';
+  import type { PotionSlot } from '$lib/game/potions.ts';
 
   let {
     client,
@@ -10,6 +11,7 @@
     biome,
     subBiome,
     interactPrompt = null,
+    potionSlots = [],
     onChat,
   }: {
     client: GameClient;
@@ -18,8 +20,12 @@
     subBiome?: string;
     /** Action available on the player's current tile (stairs / exit), or null. */
     interactPrompt?: InteractPrompt | null;
+    /** Held potions (one slot per carried type), for the belt + quaff hotkeys. */
+    potionSlots?: PotionSlot[];
     onChat: (text: string) => void;
   } = $props();
+
+  const potionTotal = $derived(potionSlots.reduce((n, s) => n + s.count, 0));
 
   let chatText = $state('');
   const me = $derived(client.me);
@@ -52,11 +58,20 @@
     {#if me}
       <div class="me-class" style="--accent:{myClass.accent}">
         <b>{myClass.name}</b>
-        <span class="hp">♥ {me.hp}/{me.hpMax}</span>
-        <span class="purse">🪙 {me.gold} · 🧪 {me.potions}</span>
+        <span class="hp">♥ {me.hp}/{me.hpMax}{#if me.might > 0} · ⚔{me.might}{/if}</span>
+        <span class="purse">🪙 {me.gold} · 🧪 {potionTotal}</span>
         <div class="abilities">
           {#each myClass.abilities as ab (ab.name)}<span class="chip" title={ab.desc}>{ab.name}</span>{/each}
         </div>
+        {#if potionSlots.length}
+          <div class="potions">
+            {#each potionSlots as slot, i (slot.id)}
+              <span class="potion" class:bad={slot.identified && !slot.good} class:known={slot.identified} title="Press {i + 1} to quaff">
+                <kbd>{i + 1}</kbd>{slot.label} ×{slot.count}
+              </span>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -83,7 +98,8 @@
     </div>
     <div class="panel hint">
       <div><b>Move</b> WASD / arrows · <b>attack</b> into foes</div>
-      <div><b>Use</b> Space / E · <b>Potion</b> Q</div>
+      <div><b>Use</b> Space / E · <b>Heal</b> Q · <b>Quaff</b> 1–9</div>
+      <div><b>Travel</b> click tile · <b>Explore</b> X · <b>Stairs</b> G</div>
       <div><b>Look</b> drag · <b>Zoom</b> wheel</div>
     </div>
   </div>
@@ -307,6 +323,42 @@
     padding: 2px 6px;
     font-size: 10px;
     color: #cfd3db;
+  }
+  .me-class .potions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .me-class .potion {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(120, 90, 200, 0.16);
+    border: 1px solid rgba(150, 120, 220, 0.3);
+    border-radius: 5px;
+    padding: 2px 6px 2px 3px;
+    font-size: 10px;
+    color: #d6cdf0;
+    text-transform: capitalize;
+  }
+  .me-class .potion.known {
+    background: rgba(90, 170, 120, 0.16);
+    border-color: rgba(120, 200, 150, 0.35);
+    color: #cdeed8;
+  }
+  .me-class .potion.bad {
+    background: rgba(200, 90, 90, 0.16);
+    border-color: rgba(220, 120, 120, 0.35);
+    color: #f0cdcd;
+  }
+  .me-class .potion kbd {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
   }
   .roster {
     display: flex;

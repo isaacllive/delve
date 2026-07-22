@@ -36,6 +36,21 @@ describe('spawnMonsters', () => {
     }
   });
 
+  it('occasionally spawns out-of-depth monsters from a deeper tier', () => {
+    // Floors 0–19 are the first biome tier (rats/goblins); an out-of-depth roll
+    // pulls a tier-2 foe (skeleton/ghoul). Over several shallow floors at least
+    // one should appear, and it must still be deterministic.
+    const d = generateDungeon('ood-seed');
+    const deeperIds = new Set(['skeleton', 'ghoul']);
+    let found = 0;
+    for (let depth = 0; depth < 8; depth++) {
+      for (const m of spawnMonsters(d.seed, getLevel(d, depth))) {
+        if (deeperIds.has(m.kindId)) found++;
+      }
+    }
+    expect(found).toBeGreaterThan(0);
+  });
+
   it('ordinary monsters start asleep; the boss starts hunting', () => {
     const d = generateDungeon('mon-seed', { levelCount: 3 });
     const mons = spawnMonsters(d.seed, getLevel(d, 2));

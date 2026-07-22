@@ -36,6 +36,8 @@
     tick,
     bossDefeated = false,
     onYaw,
+    onPickCell,
+    onExplored,
     // ── DEBUG toggles ───────────────────────────────────────────────────────
     // Exposed as props so the in-game debug menu can flip them live. Defaults
     // preserve the current dev view: all terrain shown (no fog), ceiling on.
@@ -63,6 +65,11 @@
     /** Reports the camera's azimuth (radians) whenever it changes, so the HUD
      *  compass can orient relative to the current view. */
     onYaw?: (yaw: number) => void;
+    /** A click on the floor resolves to a grid cell (for click-to-travel). */
+    onPickCell?: (col: number, row: number) => void;
+    /** The current floor's fog-memory (explored) set, pushed each fog update so
+     *  auto-explore can find the nearest un-seen cell. Same array ref each tick. */
+    onExplored?: (depth: number, explored: boolean[]) => void;
     debugShowAllTerrain?: boolean;
     debugHideCeiling?: boolean;
     debugAmbient?: number;
@@ -379,6 +386,8 @@
     controls.minDistance = 3;
     controls.maxDistance = 24;
 
+    setupPicking(renderer.domElement);
+
     // A dim ambient so revealed-but-dark memory isn't pure black; torches do
     // the real lighting on avatars/props.
     scene.add(new THREE.AmbientLight(0x223, 0.6));
@@ -390,6 +399,34 @@
     window.addEventListener('resize', resize);
     animate();
     ready = true; // signal the build/update effect to run now that THREE exists
+  }
+
+  // Click-to-travel: a click (not a drag) on the floor resolves to a grid cell.
+  let _pickDown: { x: number; y: number } | null = null;
+  function setupPicking(dom: HTMLElement) {
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const plane = new THREE.Plane();
+    const hit = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const coplanar = new THREE.Vector3();
+    dom.addEventListener('pointerdown', (e) => {
+      _pickDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+    });
+    dom.addEventListener('pointerup', (e) => {
+      const down = _pickDown;
+      _pickDown = null;
+      if (e.button !== 0 || !down || !camera || !onPickCell) return;
+      // A meaningful drag is an orbit gesture, not a travel click.
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+      const rect = dom.getBoundingClientRect();
+      ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      // Intersect a horizontal plane at the delver's floor height, then snap.
+      plane.setFromNormalAndCoplanarPoint(up, coplanar.set(0, meCell.elev, 0));
+      if (!ray.ray.intersectPlane(plane, hit)) return;
+      onPickCell(Math.round(hit.x), Math.round(hit.z));
+    });
   }
 
   function resize() {
@@ -707,6 +744,8 @@
     }
 
     refreshAvatars(viewers);
+    // Hand the up-to-date explored set to the parent (auto-explore reads it).
+    onExplored?.(l.depth, revealed);
   }
 
   // ── fade helpers ──────────────────────────────────────────────────────────

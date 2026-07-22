@@ -28,11 +28,19 @@ import {
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   monsterReward,
-  POTION_COST,
-  POTION_HEAL,
   spawnLoot,
   type Loot,
 } from '../game/loot.ts';
+import {
+  HARM_DAMAGE,
+  LIFE_MAX_HP,
+  MIGHT_ATTACK,
+  POTION_COST,
+  POTION_HEAL,
+  potionAppearances,
+  potionLabel,
+  type PotionKind,
+} from '../game/potions.ts';
 import {
   headingOf,
   MAX_CHAT_LEN,
@@ -67,6 +75,9 @@ interface Run {
   loot: Map<number, Loot[]>;
   /** Hidden traps per floor index, spawned lazily alongside monsters. */
   traps: Map<number, Trap[]>;
+  /** Potion type ids the party has identified this run (shop-bought healing is
+   *  known from the start). */
+  identified: Set<string>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -128,6 +139,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     // Only reveal traps that are sprung or have been spotted — armed, unnoticed
     // traps stay secret so the client can't map them out.
     traps: trapsOn(run, floor).filter((t) => t.revealed).map((t) => toTrapState(t, floor)),
+    identified: [...run.identified],
     bossDefeated: run.bossDefeated,
   };
 }
@@ -182,6 +194,7 @@ function joinRun(
       monsters: new Map(),
       loot: new Map(),
       traps: new Map(),
+      identified: new Set<string>(['healing']), // the Provisioner's wares are labelled
     };
     runs.set(code, run);
   }
@@ -203,7 +216,8 @@ function joinRun(
     hp: cls.hp,
     hpMax: cls.hp,
     gold: 0,
-    potions: 1,
+    potions: { healing: 1 },
+    might: 0,
     facing: 0, // face north — toward the camp's descent portal
     alive: true,
   };
@@ -223,7 +237,8 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
   // Striking an unaware monster (sleeping / wandering) lands a sneak-attack
   // bonus; the blow then wakes it (or its corpse is moot).
   const sneak = isUnaware(m.state);
-  const dmg = getClass(player.state.classId).attack * (sneak ? SNEAK_MULTIPLIER : 1);
+  const base = getClass(player.state.classId).attack + player.state.might;
+  const dmg = base * (sneak ? SNEAK_MULTIPLIER : 1);
   m.state = 'hunting';
   m.hp -= dmg;
   if (m.hp <= 0) {
@@ -257,8 +272,10 @@ function collectLootHere(run: Run, player: Player): void {
     st.gold += l.amount;
     send(player.ws, { t: 'log', text: `You pocket ${l.amount} gold.` });
   } else {
-    st.potions += 1;
-    send(player.ws, { t: 'log', text: `You find a healing potion.` });
+    const type = (l.potionType ?? 'healing') as PotionKind;
+    st.potions[type] = (st.potions[type] ?? 0) + 1;
+    const label = potionLabel(type, potionAppearances(run.seed), run.identified.has(type));
+    send(player.ws, { t: 'log', text: `You find ${label}.` });
   }
 }
 
@@ -425,7 +442,7 @@ function buyPotion(run: Run, player: Player): void {
   if (!st.alive || st.level !== CAMP_DEPTH) return;
   if (st.gold >= POTION_COST) {
     st.gold -= POTION_COST;
-    st.potions += 1;
+    st.potions.healing = (st.potions.healing ?? 0) + 1;
     send(player.ws, { t: 'log', text: `Provisioner: "A potion, ${POTION_COST}g. Stay alive down there."` });
     broadcastState(run);
   } else {
@@ -491,14 +508,52 @@ function handleInteract(run: Run, player: Player): void {
   }
 }
 
-/** Quaff a healing potion (no-op if none, dead, or already at full HP). */
-function handleUsePotion(run: Run, player: Player): void {
+/** Quaff a potion of `typeId` (defaults to Healing for the bare Q key). No-op if
+ *  dead, none of that type held, or (for Healing only) already at full HP so a
+ *  precious heal isn't wasted. Applies the effect, then identifies the type for
+ *  the whole party — identify-by-use. */
+function handleUsePotion(run: Run, player: Player, typeId?: string): void {
   const st = player.state;
-  if (!st.alive || st.potions <= 0 || st.hp >= st.hpMax) return;
-  st.potions -= 1;
-  st.hp = Math.min(st.hpMax, st.hp + POTION_HEAL);
-  send(player.ws, { t: 'log', text: `You quaff a potion (+${POTION_HEAL} HP).` });
+  if (!st.alive) return;
+  const type = (typeId ?? 'healing') as PotionKind;
+  if ((st.potions[type] ?? 0) <= 0) return; // don't have one
+  // Don't waste a Healing potion at full HP (matches the old Q behaviour).
+  if (type === 'healing' && st.hp >= st.hpMax) return;
+
+  st.potions[type] -= 1;
+  const wasKnown = run.identified.has(type);
+  applyPotion(player, type);
+  run.identified.add(type);
+  if (!wasKnown) {
+    const appear = potionAppearances(run.seed)[type];
+    broadcast(run, { t: 'log', text: `The ${appear} potion was ${potionLabel(type, potionAppearances(run.seed), true)}!` });
+  }
   broadcastState(run);
+}
+
+/** Apply a quaffed potion's effect to the drinker + log it. Harm is capped so a
+ *  mistaken quaff stings but can't kill (floored at 1 HP). */
+function applyPotion(player: Player, type: PotionKind): void {
+  const st = player.state;
+  switch (type) {
+    case 'healing':
+      st.hp = Math.min(st.hpMax, st.hp + POTION_HEAL);
+      send(player.ws, { t: 'log', text: `You quaff a Healing potion (+${POTION_HEAL} HP).` });
+      break;
+    case 'life':
+      st.hpMax += LIFE_MAX_HP;
+      st.hp = st.hpMax;
+      send(player.ws, { t: 'log', text: `Vitality surges through you (+${LIFE_MAX_HP} max HP, fully healed).` });
+      break;
+    case 'might':
+      st.might += MIGHT_ATTACK;
+      send(player.ws, { t: 'log', text: `Strength floods your arms (+${MIGHT_ATTACK} attack).` });
+      break;
+    case 'harm':
+      st.hp = Math.max(1, st.hp - HARM_DAMAGE);
+      send(player.ws, { t: 'log', text: `Caustic fumes sear you! (−${HARM_DAMAGE} HP)` });
+      break;
+  }
 }
 
 // ── Monster AI tick ─────────────────────────────────────────────────────────
@@ -659,7 +714,7 @@ function createWss(): WebSocketServer {
           handleInteract(run, player);
           break;
         case 'use':
-          handleUsePotion(run, player);
+          handleUsePotion(run, player, typeof msg.potion === 'string' ? msg.potion : undefined);
           break;
         case 'descend':
           descendFromCamp(run, player);

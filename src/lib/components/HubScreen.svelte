@@ -21,6 +21,7 @@
   const me = $derived(client.me);
   const myClass = $derived(getClass(me?.classId));
   const canAfford = $derived((me?.gold ?? 0) >= POTION_COST);
+  const potionTotal = $derived(me ? Object.values(me.potions).reduce((n, c) => n + c, 0) : 0);
 
   function submitChat(e: Event) {
     e.preventDefault();
@@ -70,7 +71,7 @@
             <div class="stats">
               <span class="stat hp">♥ {me.hp}/{me.hpMax}</span>
               <span class="stat">🪙 {me.gold}g</span>
-              <span class="stat">🧪 {me.potions}</span>
+              <span class="stat">🧪 {potionTotal}</span>
             </div>
             <div class="abilities">
               {#each myClass.abilities as ab (ab.name)}

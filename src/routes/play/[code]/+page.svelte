@@ -3,6 +3,9 @@
   import { GameClient } from '$lib/net.svelte.ts';
   import { generateDungeon, getLevel, CAMP_DEPTH, type Dungeon } from '$lib/game/dungeon.ts';
   import { interactablePrompt } from '$lib/game/interactions.ts';
+  import { findPath, nearestUnexplored, type Step } from '$lib/game/pathfind.ts';
+  import { cellIndex } from '$lib/game/grid.ts';
+  import { potionAppearances, potionBelt } from '$lib/game/potions.ts';
   import DungeonView3D from '$lib/components/DungeonView3D.svelte';
   import Hud from '$lib/components/Hud.svelte';
   import HubScreen from '$lib/components/HubScreen.svelte';
@@ -36,6 +39,11 @@
   });
 
   const me = $derived(client.me);
+  // Held-potion belt (one slot per type carried), shared by the HUD display and
+  // the number-key quaff mapping so they never drift.
+  const potionSlots = $derived(
+    me && client.seed ? potionBelt(me.potions, potionAppearances(client.seed), client.identified) : [],
+  );
   // At CAMP_DEPTH the player is on the surface: show the 2D hub, not the 3D
   // dungeon (so no geometry or enemies render here — the camp is a safe zone).
   const atHub = $derived(!!me && me.level <= CAMP_DEPTH);
@@ -54,6 +62,100 @@
     const el = document.activeElement;
     return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
   }
+
+  // ── Auto-travel ───────────────────────────────────────────────────────────
+  // Click a tile (or press X to auto-explore) and the client plots a route over
+  // the locally-known geometry, then streams one `move` intent per step. The
+  // server validates every step; we advance only after each move resolves (a new
+  // broadcast), and stop on arrival, a blocked step, a nearby hunting foe, or any
+  // manual key. The renderer feeds us the explored set for auto-explore targets.
+  let travel = $state<{ path: Step[]; i: number } | null>(null);
+  let travelSentTick = -1;
+  let explored: boolean[] | null = null;
+  let exploredDepth = -99;
+
+  function cancelTravel(): void {
+    travel = null;
+  }
+
+  /** Revealed-but-armed traps on the current floor, as cell indices to avoid. */
+  function armedTrapCells(): Set<number> {
+    const s = new Set<number>();
+    if (currentLevel) {
+      for (const t of client.traps) {
+        if (!t.sprung) s.add(cellIndex(t.col, t.row, currentLevel.cols));
+      }
+    }
+    return s;
+  }
+
+  function sendTravelStep(): void {
+    const m = client.me;
+    if (!travel || !m) return;
+    const s = travel.path[travel.i];
+    travelSentTick = client.tick;
+    client.move(Math.sign(s.col - m.col), Math.sign(s.row - m.row));
+  }
+
+  function beginTravelTo(col: number, row: number): void {
+    const m = client.me;
+    if (!currentLevel || !m || !m.alive || atHub) return;
+    const path = findPath(
+      currentLevel,
+      { col: m.col, row: m.row },
+      { col, row },
+      { avoidHazards: true, blocked: armedTrapCells() },
+    );
+    if (!path || path.length === 0) return;
+    travel = { path, i: 0 };
+    sendTravelStep();
+  }
+
+  function autoExplore(): void {
+    const m = client.me;
+    if (!currentLevel || !m || !explored || exploredDepth !== m.level) return;
+    const target = nearestUnexplored(
+      currentLevel,
+      { col: m.col, row: m.row },
+      explored,
+      { avoidHazards: true, blocked: armedTrapCells() },
+    );
+    if (target) beginTravelTo(target.col, target.row);
+  }
+
+  function travelToStairs(): void {
+    const sd = currentLevel?.stairsDown;
+    if (sd) beginTravelTo(sd.col, sd.row);
+  }
+
+  // Drive the route forward as each move resolves; stop on the stop conditions.
+  $effect(() => {
+    const tk = client.tick;
+    const t = travel;
+    const m = client.me;
+    if (!t) return;
+    if (!m || !m.alive || atHub) {
+      travel = null;
+      return;
+    }
+    // Interrupt if a foe has woken and is closing in — don't sleepwalk into it.
+    if (client.monsters.some((mo) => mo.state === 'hunting' && Math.abs(mo.col - m.col) <= 6 && Math.abs(mo.row - m.row) <= 6)) {
+      travel = null;
+      return;
+    }
+    if (tk <= travelSentTick) return; // our last move hasn't resolved yet
+    const target = t.path[t.i];
+    if (m.col === target.col && m.row === target.row) {
+      if (t.i >= t.path.length - 1) {
+        travel = null; // arrived
+        return;
+      }
+      t.i += 1;
+      sendTravelStep();
+    } else {
+      travel = null; // the step was blocked (a foe stepped in) — stop
+    }
+  });
 
   // Movement is CAMERA-RELATIVE: keys map to an on-screen heading (0 = up /
   // into the screen, clockwise), which we rotate by the camera yaw and snap to
@@ -89,19 +191,45 @@
     // are inert so stray keystrokes can't shuffle the camp token.
     if (atHub) return;
     const key = e.key.toLowerCase();
+    // Auto-travel keys: X = auto-explore to the nearest unseen cell, G = go to
+    // the down-stairs. Any other action key cancels an in-progress route.
+    if (key === 'x') {
+      e.preventDefault();
+      if (travel) cancelTravel();
+      else autoExplore();
+      return;
+    }
+    if (key === 'g') {
+      e.preventDefault();
+      travelToStairs();
+      return;
+    }
     if (key === ' ' || key === 'e') {
       e.preventDefault();
+      cancelTravel();
       client.interact();
       return;
     }
     if (key === 'q') {
       e.preventDefault();
-      client.usePotion();
+      cancelTravel();
+      client.usePotion(); // bare Q → a Healing potion
+      return;
+    }
+    // Number keys quaff the matching belt slot (a gamble on an unidentified one).
+    if (/^[1-9]$/.test(key)) {
+      const slot = potionSlots[Number(key) - 1];
+      if (slot) {
+        e.preventDefault();
+        cancelTravel();
+        client.usePotion(slot.id);
+      }
       return;
     }
     const screen = SCREEN_DIR[key];
     if (screen !== undefined) {
       e.preventDefault();
+      cancelTravel(); // manual movement overrides any auto-travel
       // world heading appears on screen at (heading + cameraYaw) → invert.
       const [dc, dr] = stepFor(screen - cameraYaw);
       client.move(dc, dr);
@@ -146,6 +274,8 @@
       tick={client.tick}
       bossDefeated={client.bossDefeated}
       onYaw={(y) => (cameraYaw = y)}
+      onPickCell={(c, r) => beginTravelTo(c, r)}
+      onExplored={(depth, ex) => { explored = ex; exploredDepth = depth; }}
       debugShowAllTerrain={debugFlags.showAllTerrain}
       debugHideCeiling={debugFlags.hideCeiling}
       debugAmbient={debugFlags.ambient}
@@ -156,6 +286,7 @@
       {client}
       {cameraYaw}
       {interactPrompt}
+      potionSlots={potionSlots}
       biome={currentLevel?.biomeName}
       subBiome={currentLevel?.subBiomeName}
       onChat={(t) => client.sendChat(t)}

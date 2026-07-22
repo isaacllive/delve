@@ -18,6 +18,8 @@ export class GameClient {
   loot = $state<LootState[]>([]);
   /** Revealed traps (sprung or spotted) on the local delver's floor. */
   traps = $state<TrapState[]>([]);
+  /** Potion type ids the party has identified this run. */
+  identified = $state<string[]>([]);
   youId = $state<string | null>(null);
   seed = $state<string | null>(null);
   levelCount = $state(0);
@@ -90,6 +92,7 @@ export class GameClient {
         this.monsters = msg.monsters;
         this.loot = msg.loot;
         this.traps = msg.traps;
+        this.identified = msg.identified;
         this.tick = msg.tick;
         this.bossDefeated = msg.bossDefeated;
         break;
@@ -125,8 +128,9 @@ export class GameClient {
   interact(): void {
     this.send({ t: 'interact' });
   }
-  usePotion(): void {
-    this.send({ t: 'use' });
+  /** Quaff a potion by type id; omit to quaff a Healing potion (the Q key). */
+  usePotion(type?: string): void {
+    this.send({ t: 'use', potion: type });
   }
   /** Leave the out-of-dungeon hub and drop into floor 0. */
   descend(): void {

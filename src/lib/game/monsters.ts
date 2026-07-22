@@ -107,15 +107,28 @@ export function nextAwareness(
   }
 }
 
-function tierFor(depth: number): MonsterKind[] {
-  return TIERS[Math.min(TIERS.length - 1, Math.floor(depth / FLOORS_PER_BIOME))];
+/** Band index (0-based biome tier) for a depth, clamped to the deepest tier. */
+function tierIndexFor(depth: number): number {
+  return Math.min(TIERS.length - 1, Math.floor(depth / FLOORS_PER_BIOME));
 }
+
+function tierFor(depth: number): MonsterKind[] {
+  return TIERS[tierIndexFor(depth)];
+}
+
+/** Chance a given spawn is "out of depth" — a tougher monster pulled from a
+ *  deeper tier. Brogue never rewards grinding: the occasional over-leveled foe
+ *  keeps even shallow floors tense. No-op on the deepest tier (nothing deeper). */
+const OUT_OF_DEPTH_CHANCE = 0.09;
 
 /** Deterministic monster population for a floor (empty in the base camp). */
 export function spawnMonsters(seed: string, level: DungeonLevel): Monster[] {
   if (level.depth < 0) return []; // camp is safe
   const rng = makeRng(`${seed}#mon#${level.depth}`);
-  const kinds = tierFor(level.depth);
+  const tier = tierIndexFor(level.depth);
+  const kinds = TIERS[tier];
+  // One tier deeper (same on the last band) for occasional out-of-depth spawns.
+  const deeperKinds = TIERS[Math.min(TIERS.length - 1, tier + 1)];
   const out: Monster[] = [];
 
   // Open floor cells that aren't the entry / stairs / boss anchor.
@@ -141,7 +154,10 @@ export function spawnMonsters(seed: string, level: DungeonLevel): Monster[] {
     const row = Math.floor(idx / level.cols);
     // Don't spawn right on top of the arrival point.
     if (Math.abs(col - level.entry.col) + Math.abs(row - level.entry.row) < 6) continue;
-    const k = rng.pick(kinds);
+    // Roll the out-of-depth chance FIRST (regardless of outcome) so the RNG
+    // stream — and thus the whole layout — stays deterministic per floor.
+    const outOfDepth = rng.chance(OUT_OF_DEPTH_CHANCE);
+    const k = rng.pick(outOfDepth ? deeperKinds : kinds);
     out.push(makeMonster(k, col, row, `${level.depth}-${n}`));
     n++;
   }

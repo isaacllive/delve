@@ -28,8 +28,11 @@ export interface PlayerState {
   hpMax: number;
   /** Gold carried this expedition (lost on death). */
   gold: number;
-  /** Healing potions carried. */
-  potions: number;
+  /** Potions carried, counted per type id (see potions.ts). Types the party
+   *  hasn't identified are shown by appearance, not name. */
+  potions: Record<string, number>;
+  /** Permanent attack bonus accrued from Might potions. */
+  might: number;
   /** Facing as a compass heading in radians: 0 = North (−row), increasing
    *  clockwise (PI/2 = East). Updated from the last move direction. */
   facing: number;
@@ -98,7 +101,7 @@ export type ClientMsg =
   | { t: 'join'; code: string; name: string; seed?: string; classId?: string }
   | { t: 'move'; dcol: number; drow: number }
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
-  | { t: 'use' } // quaff a healing potion
+  | { t: 'use'; potion?: string } // quaff a potion (type id; omitted = a healing potion)
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
   | { t: 'chat'; text: string }
@@ -114,6 +117,8 @@ export type ServerMsg =
       monsters: MonsterState[];
       loot: LootState[];
       traps: TrapState[];
+      /** Potion type ids the party has identified this run. */
+      identified: string[];
       tick: number;
       bossDefeated: boolean;
     }

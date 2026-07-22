@@ -6,6 +6,7 @@
 import { cellIndex } from './grid.ts';
 import { makeRng } from './rng.ts';
 import type { DungeonLevel } from './dungeon.ts';
+import { POTION_COST, POTION_HEAL, rollPotionType, type PotionKind } from './potions.ts';
 
 export type LootKind = 'gold' | 'potion';
 
@@ -16,6 +17,9 @@ export interface Loot {
   row: number;
   /** Gold value (for `gold`); ignored for potions. */
   amount: number;
+  /** Which potion type this is (for `potion`); its identity is hidden from the
+   *  player until identified. Undefined for gold. */
+  potionType?: PotionKind;
 }
 
 /** Gold a monster drops when slain, scaled by how dangerous it is. */
@@ -23,9 +27,9 @@ export function monsterReward(damage: number, boss: boolean): number {
   return boss ? 500 : 3 + damage * 2;
 }
 
-/** Healing a potion restores, and its shop price. */
-export const POTION_HEAL = 12;
-export const POTION_COST = 15;
+// Potion economy constants live in potions.ts; re-exported here so existing
+// callers (gameServer, loot.test) keep importing them from loot.
+export { POTION_COST, POTION_HEAL };
 
 /** Deterministic floor loot (none in the base camp). */
 export function spawnLoot(seed: string, level: DungeonLevel): Loot[] {
@@ -53,7 +57,7 @@ export function spawnLoot(seed: string, level: DungeonLevel): Loot[] {
     const col = idx % level.cols;
     const row = Math.floor(idx / level.cols);
     if (rng.chance(0.25)) {
-      out.push({ id: `${level.depth}-l${n}`, kind: 'potion', col, row, amount: 0 });
+      out.push({ id: `${level.depth}-l${n}`, kind: 'potion', col, row, amount: 0, potionType: rollPotionType(rng) });
     } else {
       const base = 5 + level.depth * 2;
       out.push({ id: `${level.depth}-l${n}`, kind: 'gold', col, row, amount: base + rng.int(0, base) });

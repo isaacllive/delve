@@ -31,7 +31,7 @@
       id: 'dbg', name: 'Debug Warden', color: '#ffb047', classId: 'warden',
       level: level.depth, col: entry.col, row: entry.row,
       elevation: Math.max(0, cell?.elevation ?? 0), torchRadius: 9,
-      hp: 20, hpMax: 20, gold: 0, potions: 0, facing: 0, alive: true,
+      hp: 20, hpMax: 20, gold: 0, potions: {}, might: 0, facing: 0, alive: true,
     };
   });
 
