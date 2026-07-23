@@ -15,7 +15,14 @@ import {
   type Dungeon,
   type DungeonLevel,
 } from '../game/dungeon.ts';
-import { blocksMove, cellAt, hazardAt, makeCell, occluderHeight } from '../game/terrain.ts';
+import {
+  blocksMove,
+  cellAt,
+  makeCell,
+  moveCostTicks,
+  occluderHeight,
+  propsAt,
+} from '../game/terrain.ts';
 import { hasLineOfSight } from '../game/los.ts';
 import { getClass } from '../game/classes.ts';
 import {
@@ -63,7 +70,8 @@ import {
   type HazardField,
 } from '../game/hazards.ts';
 import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
-import { decayStatuses, emptyStatuses } from '../game/status.ts';
+import { afflict, decayStatuses, emptyStatuses, hasStatus, isEntangled } from '../game/status.ts';
+import { cellIndex } from '../game/grid.ts';
 import { emitScent, makeScentFieldForLevel, stepScent, type ScentField } from '../game/scent.ts';
 import { decideMonsterAction } from '../game/monsterAi.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
@@ -661,6 +669,13 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   const st = player.state;
   if (!st.alive) return; // the fallen do not move
   const level = getLevel(run.dungeon, st.level);
+  // Held fast in silk: the turn goes on tearing free, not on going anywhere.
+  // The status decays on the same turn clock, so the struggle is finite.
+  if (isEntangled(st.statuses)) {
+    send(player.ws, { t: 'log', text: `You strain against the sticky strands.` });
+    endPlayerTurn(run, player);
+    return;
+  }
   const dx = Math.sign(dcol);
   const dy = Math.sign(drow);
   if (dx === 0 && dy === 0) return;
@@ -692,15 +707,24 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   // and never share a cell with a delver or monster.
   mirrorFloorGuardians(run, st.level, dx, dy);
 
+  // Floating clears everything underfoot — chasms, water, and the pit traps
+  // that are holes in the same floor. It does NOT clear lava or lichen, which
+  // are resolved per-turn below (heat rises; you are still over it).
+  const floating = hasStatus(st.statuses, 'levitating');
+
   // Hidden traps spring on entry. They sit on floor cells, so they never
   // coincide with a natural pit/water hazard — resolve them first.
   const trap = trapAt(trapsOn(run, st.level), nc, nr);
-  if (trap && !trap.sprung) {
+  const pitTrapFloatedOver = trap?.kind === 'pit' && floating;
+  if (trap && !trap.sprung && !pitTrapFloatedOver) {
     springTrap(run, player, level, trap);
   } else {
-    // Natural hazard resolution on entry.
-    const haz = hazardAt(level, nc, nr);
-    if (haz === 'pit') {
+    // Natural terrain effects on entry, read from the terrain registry rather
+    // than by naming kinds, so terrain added later resolves without a change
+    // here. Continuous effects (lava, lichen) are NOT applied on entry — the
+    // per-turn system below owns them, so entering can't be charged twice.
+    const props = propsAt(level, nc, nr);
+    if (props.descends && !floating) {
       fallThrough(
         run,
         player,
@@ -710,16 +734,48 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
         (n) => `You plunge into the chasm and land on level ${n + 1}.`,
         `The pit is bottomless — you barely scramble clear.`,
       );
-    } else if (haz === 'water') {
+    } else if (props.submersion === 'deep' && !floating) {
+      // Swimming takes both hands: the current strips loose pack items. What
+      // is equipped stays — terrain says WHEN you are swept, the server owns
+      // WHICH of your things go.
+      sweepPack(run, player);
+    } else if (props.submersion === 'shallow') {
       send(player.ws, { t: 'log', text: `You wade through cold water.` });
+    }
+    // Webs snare whoever blunders in. The strands tear as you hit them, so the
+    // cell clears now and the cost is the turns spent pulling free.
+    if (props.entangleTurns > 0) {
+      st.statuses = [...afflict(st.statuses, 'entangled', props.entangleTurns)];
+      level.cells[cellIndex(nc, nr, level.cols)] = makeCell('floor');
+      send(player.ws, { t: 'log', text: `You blunder into a web and are stuck fast!` });
     }
   }
   if (st.alive) {
     spotTraps(run, player);
     collectLootHere(run, player);
   }
-  // A completed step is a turn — advance the world (monsters act, you regen).
-  endPlayerTurn(run, player);
+  // A completed step is a turn — and some ground takes longer to cross than
+  // others, so the step's cost comes from the terrain you stepped onto.
+  endPlayerTurn(run, player, moveCostTicks(level, nc, nr));
+}
+
+/** The current sweeps a swimmer's loose pack away. Equipped weapon and armor
+ *  stay — they are strapped on; everything carried in hand is lost. */
+function sweepPack(run: Run, player: Player): void {
+  const st = player.state;
+  const lostItems = st.inventory.length;
+  const lostGear = st.gear.filter((g) => g.instId !== st.equippedWeapon && g.instId !== st.equippedArmor);
+  if (lostItems === 0 && lostGear.length === 0) {
+    send(player.ws, { t: 'log', text: `You swim through the deep water.` });
+    return;
+  }
+  st.inventory = [];
+  st.gear = st.gear.filter((g) => g.instId === st.equippedWeapon || g.instId === st.equippedArmor);
+  send(player.ws, {
+    t: 'log',
+    text: `The current tears your pack away — you lose everything not strapped on!`,
+  });
+  void run;
 }
 
 /** Drop a player through a hole at (nc,nr) — a chasm or a sprung trap door — to
@@ -1507,6 +1563,24 @@ const WORLD_SYSTEMS: WorldSystem[] = [
   ({ run, player }) => maybeStarve(run, player),
   ({ run, player }) => maybePoison(run, player),
   ({ player }) => maybeRegen(player),
+  // Standing ON something that hurts costs you every turn you stay there, not
+  // just the turn you stepped in. Both values come from the terrain registry, so
+  // a new caustic or scalding terrain is resolved the day it is added.
+  ({ run, player }) => {
+    const st = player.state;
+    if (!st.alive || st.level < 0) return;
+    const props = propsAt(getLevel(run.dungeon, st.level), st.col, st.row);
+    if (props.contactDamage > 0) {
+      damagePlayer(run, player, props.contactDamage, {
+        epitaph: 'was consumed by molten rock',
+        hit: `You are scorched! (−${props.contactDamage} HP)`,
+      });
+    }
+    if (props.contactPoison > 0 && st.alive) {
+      st.poison += props.contactPoison;
+      send(player.ws, { t: 'log', text: `The lichen stings — poison seeps in.` });
+    }
+  },
   // Timed statuses tick down on the delver. Monsters decay their own on the
   // action they take (see takeMonsterTurns) — a fast monster's affliction must
   // lapse over ITS actions, not the player's, or haste would also grant it a

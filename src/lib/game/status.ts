@@ -45,6 +45,8 @@ import { TICKS_PER_TURN, speedTicks, type Speed } from './energy.ts';
  *   paralyzed    cannot act at all                            → canAct
  *   fireImmune   fire does nothing to you                     → resolveFireDamage
  *   poisoned     loses HP every turn until it runs out        → poisonDamage
+ *   entangled    held fast in spider silk; a move spends the
+ *                turn tearing free instead of stepping        → isEntangled
  *
  * DECLARED BUT NOT RESOLVED HERE — each needs state this module cannot see, so
  * faking a pure answer would be a lie. What each actually needs:
@@ -72,6 +74,7 @@ export type StatusKind =
   | 'paralyzed'
   | 'fireImmune'
   | 'poisoned'
+  | 'entangled'
   | 'telepathic'
   | 'hallucinating'
   | 'discordant'
@@ -90,6 +93,7 @@ export const STATUS_KINDS: readonly StatusKind[] = [
   'paralyzed',
   'fireImmune',
   'poisoned',
+  'entangled',
   'telepathic',
   'hallucinating',
   'discordant',
@@ -398,6 +402,15 @@ export function absorbDamage(statuses: StatusSet, damage: number): Absorption {
  */
 export function canAct(statuses: StatusSet): boolean {
   return !hasStatus(statuses, 'paralyzed');
+}
+
+// ── resolution: entangled ────────────────────────────────────────────────────
+
+/** Is this actor held fast? Distinct from `canAct` on purpose: paralysis stops
+ *  everything, whereas an entangled actor can still fight and read — it just
+ *  cannot leave the cell until it has torn free. */
+export function isEntangled(statuses: StatusSet): boolean {
+  return hasStatus(statuses, 'entangled');
 }
 
 // ── resolution: fireImmune ───────────────────────────────────────────────────

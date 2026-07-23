@@ -19,7 +19,7 @@
 
 import { cellIndex, inBounds, DIRS4, DIRS8 } from './grid.ts';
 import type { Rng } from './rng.ts';
-import { blocksMove, isFlammable, makeCell, type Level } from './terrain.ts';
+import { blocksMove, burntKind, isFlammable, isIgnitionSource, makeCell, type Level } from './terrain.ts';
 
 // ── gas kinds ────────────────────────────────────────────────────────────────
 // The two Brogue starter gases. Caustic gas damages; confusion gas scrambles
@@ -162,14 +162,18 @@ export function stepHazards(field: HazardField, level: Level, rng: Rng): void {
 function stepFire(field: HazardField, level: Level, rng: Rng): void {
   const { cols, rows, fire } = field;
 
-  // 1. Consume fuel: any flammable cell that is currently burning turns to ash
-  //    (floor) NOW, so it can't be re-ignited by a neighbour next tick — this is
-  //    what makes fire spread outward once instead of oscillating forever.
+  // 1. Consume fuel: any flammable cell that is currently burning is replaced by
+  //    whatever it leaves behind NOW, so it can't be re-ignited by a neighbour
+  //    next tick — this is what makes fire spread outward once instead of
+  //    oscillating forever. What it leaves behind is the terrain kind's own
+  //    business (`burnsInto`): grass leaves floor, but a BRIDGE leaves the chasm
+  //    it spanned. Hard-coding 'floor' here silently deleted that chasm and
+  //    turned a burnt bridge into safe ground.
   for (let i = 0; i < fire.length; i++) {
     if (fire[i] <= 0) continue;
     const col = i % cols;
     const row = (i / cols) | 0;
-    if (isFlammable(level, col, row)) level.cells[i] = makeCell('floor');
+    if (isFlammable(level, col, row)) level.cells[i] = makeCell(burntKind(level.cells[i].kind));
   }
 
   // 2. Spread: collect cells to ignite from the CURRENT burning set (so this
@@ -197,6 +201,23 @@ function stepFire(field: HazardField, level: Level, rng: Rng): void {
       if (fire[ni] <= 0 && isFlammable(level, nc, nr) && rng.chance(FIRE_DIAGONAL_SPREAD_CHANCE)) {
         ignitions.push(ni);
       }
+    }
+  }
+
+  // 2b. Lava lights whatever it touches. An ignition source is permanent terrain
+  //     rather than a burning cell, so it never appears in the `fire` field and
+  //     never burns away — it just keeps setting light to adjacent fuel, which
+  //     is what makes a lava-edged grass field a trap rather than scenery.
+  for (let i = 0; i < fire.length; i++) {
+    const col = i % cols;
+    const row = (i / cols) | 0;
+    if (!isIgnitionSource(level, col, row)) continue;
+    for (const d of DIRS8) {
+      const nc = col + d.col;
+      const nr = row + d.row;
+      if (!inBounds(nc, nr, cols, rows)) continue;
+      const ni = cellIndex(nc, nr, cols);
+      if (fire[ni] <= 0 && isFlammable(level, nc, nr)) ignitions.push(ni);
     }
   }
 

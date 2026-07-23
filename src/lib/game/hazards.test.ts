@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cellIndex } from './grid.ts';
 import { makeRng } from './rng.ts';
-import { makeCell, type Level, type TerrainKind } from './terrain.ts';
+import { cellAt, makeCell, type Level, type TerrainKind } from './terrain.ts';
 import {
   FIRE_START,
   GAS_KINDS,
@@ -99,6 +99,44 @@ describe('fire', () => {
         expect(v).toBeLessThanOrEqual(FIRE_START);
       }
     }
+  });
+
+  it('leaves behind what the fuel burns INTO, not always bare floor', () => {
+    // A burnt bridge must leave the chasm it spanned. Burning it to floor would
+    // silently delete the hazard and turn a collapsed crossing into safe ground.
+    const level = makeLevel(5, 3, 'floor');
+    set(level, 2, 1, 'bridge');
+    const field = makeHazardFieldForLevel(level);
+    ignite(field, 2, 1);
+    run(field, level, 6);
+    expect(cellAt(level, 2, 1)!.kind).toBe('pit');
+
+    // Grass still burns to plain floor — the general rule, not a bridge special case.
+    const grassy = makeLevel(5, 3, 'floor');
+    set(grassy, 2, 1, 'grass');
+    const gf = makeHazardFieldForLevel(grassy);
+    ignite(gf, 2, 1);
+    run(gf, grassy, 6);
+    expect(cellAt(grassy, 2, 1)!.kind).toBe('floor');
+  });
+
+  it('lava sets light to fuel beside it, over and over', () => {
+    // Lava is permanent terrain, not a burning cell: it never enters the fire
+    // field and never burns away, so it keeps re-igniting its neighbours.
+    const level = makeLevel(5, 3, 'floor');
+    set(level, 1, 1, 'lava');
+    set(level, 2, 1, 'grass');
+    const field = makeHazardFieldForLevel(level);
+    expect(fireAt(field, 2, 1)).toBe(0);
+
+    run(field, level, 1);
+    expect(fireAt(field, 2, 1)).toBeGreaterThan(0); // the grass caught
+
+    // The lava itself is untouched and still there to light the next thing.
+    expect(cellAt(level, 1, 1)!.kind).toBe('lava');
+    set(level, 2, 1, 'grass'); // fresh fuel blows in
+    run(field, level, 1);
+    expect(fireAt(field, 2, 1)).toBeGreaterThan(0);
   });
 });
 
