@@ -64,6 +64,8 @@ import {
 } from '../game/hazards.ts';
 import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
 import { decayStatuses, emptyStatuses } from '../game/status.ts';
+import { emitScent, makeScentFieldForLevel, stepScent, type ScentField } from '../game/scent.ts';
+import { decideMonsterAction } from '../game/monsterAi.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -140,6 +142,10 @@ interface Run {
   gear: Map<number, GearDrop[]>;
   /** Live fire/gas field per floor index, created on first ignition/emission. */
   hazards: Map<number, HazardField>;
+  /** Scent the delvers shed, per floor index, created on first visit. Server-only
+   *  inference input for monster pursuit — it never crosses the wire, because a
+   *  client that could read it would know where every hunter was about to go. */
+  scent: Map<number, ScentField>;
   /** Per-run item appearances (disguises), derived from the seed. */
   identities: RunIdentities;
   /** Item kinds the party has identified this run (shared knowledge). */
@@ -342,6 +348,7 @@ function joinRun(
       traps: new Map(),
       gear: new Map(),
       hazards: new Map(),
+      scent: new Map(),
       identities: makeIdentities(s),
       // Food is never part of the ID game — it starts "known".
       discovered: new Set(kindsOfCategory('food')),
@@ -1193,6 +1200,16 @@ function hazardField(run: Run, floor: number): HazardField {
   return field;
 }
 
+/** The floor's scent field, built on first use (same lazy shape as hazards). */
+function scentFieldFor(run: Run, floor: number): ScentField {
+  let field = run.scent.get(floor);
+  if (!field) {
+    field = makeScentFieldForLevel(getLevel(run.dungeon, floor));
+    run.scent.set(floor, field);
+  }
+  return field;
+}
+
 /** Non-empty fire/gas cells on a floor, for broadcast (empty when quiescent). */
 function hazardCells(run: Run, floor: number): HazardCell[] {
   const field = run.hazards.get(floor);
@@ -1345,52 +1362,51 @@ function actMonster(
   }
   if (m.state === 'sleeping') return m.actionTicks; // dozing: pass the turn
 
-  if (bd <= 1) {
-    monsterBite(run, floor, m, best); // adjacent: bite
-    return m.actionTicks;
-  }
-  // Ranged attackers (turrets, archers) strike down a clear line of sight.
-  if (mHas(m, 'ranged') && bd <= AGGRO && los) {
-    monsterBite(run, floor, m, best);
-    return m.actionTicks;
-  }
-  // Summoners conjure thralls on a cooldown instead of closing the distance.
-  if (mHas(m, 'summons') && bd <= AGGRO) {
-    const cd = run.summonCd.get(m.id) ?? 0;
-    if (cd <= 0) {
+  // WHAT to do is a pure decision (monsterAi.ts): it navigates with real
+  // pathfinding when it can see you and follows the scent trail when it can't.
+  // The server stays responsible for DOING it — biting, summoning, and keeping
+  // the occupancy set straight — so the AI never has to reach into run state.
+  const cooldown = run.summonCd.get(m.id) ?? 0;
+  const action = decideMonsterAction({
+    level,
+    monster: m,
+    targets: targets.map((t) => ({
+      id: t.state.id,
+      col: t.state.col,
+      row: t.state.row,
+      elevation: t.state.elevation,
+    })),
+    occupied,
+    scent: run.scent.get(floor) ?? null,
+    aggro: AGGRO,
+    canSummon: cooldown <= 0,
+    rng: run.combatRng,
+  });
+
+  // The cooldown ticks on every turn the summoner does NOT summon. It used to be
+  // decremented inside the movement branch; the decision function only reads it,
+  // so the countdown has to live out here or a summoner would never come off
+  // cooldown once it started chasing.
+  if (action.kind !== 'summon' && cooldown > 0) run.summonCd.set(m.id, cooldown - 1);
+
+  switch (action.kind) {
+    case 'attack': {
+      const victim = targets.find((t) => t.state.id === action.targetId);
+      if (victim) monsterBite(run, floor, m, victim);
+      break;
+    }
+    case 'summon':
       summonMinions(run, floor, level, m);
       run.summonCd.set(m.id, SUMMON_COOLDOWN);
-      return m.actionTicks;
-    }
-    run.summonCd.set(m.id, cd - 1);
-  }
-  // Immobile monsters (turrets) never move — they only act at range (above).
-  if (mHas(m, 'immobile')) return m.actionTicks;
-
-  if (bd <= AGGRO) {
-    // Pursue — or, for cowards, retreat: fliers ignore ground hazards, fleers
-    // invert their heading to back away, aquatic hunters stay in deep water.
-    const flees = mHas(m, 'flees');
-    const flies = mHas(m, 'flies');
-    const aquatic = mHas(m, 'aquatic');
-    const dx = (flees ? -1 : 1) * Math.sign(best.state.col - m.col);
-    const dy = (flees ? -1 : 1) * Math.sign(best.state.row - m.row);
-    const tryStep = (cc: number, rr: number): boolean => {
-      if (cc === m.col && rr === m.row) return false;
-      const kind = cellAt(level, cc, rr)?.kind;
-      // Aquatic: water only. Fliers: anything but walls. Walkers: no walls/pits.
-      const blocked = aquatic ? kind !== 'water' : flies ? kind === 'wall' : blocksMove(level, cc, rr);
-      if (blocked) return false;
-      const key = rr * level.cols + cc;
-      if (occupied.has(key)) return false;
-      if (targets.some((t) => t.state.col === cc && t.state.row === rr)) return false;
+      break;
+    case 'move':
       occupied.delete(m.row * level.cols + m.col);
-      m.col = cc;
-      m.row = rr;
-      occupied.add(key);
-      return true;
-    };
-    tryStep(m.col + dx, m.row + dy) || tryStep(m.col + dx, m.row) || tryStep(m.col, m.row + dy);
+      m.col = action.col;
+      m.row = action.row;
+      occupied.add(m.row * level.cols + m.col);
+      break;
+    case 'wait':
+      break;
   }
   return m.actionTicks;
 }
@@ -1471,6 +1487,18 @@ interface TurnContext {
 type WorldSystem = (ctx: TurnContext) => void;
 
 const WORLD_SYSTEMS: WorldSystem[] = [
+  // Delvers shed scent where they stand; it diffuses and fades. Runs BEFORE the
+  // monsters so a hunter smells the step you just took, not the one before it.
+  // Every delver on the floor emits — a co-op party leaves one shared trail.
+  ({ run, player }) => {
+    const floor = player.state.level;
+    if (floor < 0) return; // camp is safe; nothing hunts you there
+    const field = scentFieldFor(run, floor);
+    for (const p of run.players.values()) {
+      if (p.state.alive && p.state.level === floor) emitScent(field, p.state.col, p.state.row);
+    }
+    stepScent(field, getLevel(run.dungeon, floor));
+  },
   // Monsters on the delver's floor act, spending the elapsed time.
   ({ run, player, cost }) => takeMonsterTurns(run, player.state.level, cost),
   // Fire spreads and gas diffuses on the delver's floor, burning anything in it.
