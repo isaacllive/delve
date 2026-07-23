@@ -123,8 +123,15 @@ systems). 382 tests, 0 type errors throughout.
         portcullis `gate` (blocks until a `lever` is pulled), with a guaranteed
         reward inside (Scroll of Enchanting + gear). Uses roomgen's room/door
         metadata; deterministic; never strands the critical path.
-    - [ ] *(Future polish: mirror-movement guardian statues for a spatial
-          puzzle; multi-lever / keyed gates.)*
+    - [x] **Mirror-movement guardian statues** — each vault holds a stone
+          guardian (`guardians.ts`, pure + tested) that copies the delver's every
+          step, confined to the vault, blocking the path to the reward.
+      - [ ] *(Future polish: multi-guardian / multi-lever / keyed-gate layouts.)*
+- [x] **Balance pass** — a regression test (`balance.test.ts`) models the melee
+      exchange across all 5 tiers with tier-appropriate gear and asserts the
+      delver reliably wins the 1v1 (weighting monster action speed). It confirmed
+      the curve is sound — the one "outlier" (the slow Ogre) is balanced by its
+      200-tick attack — so the guard is now in place rather than blind tweaks.
 
 *(The items below predate the refocus and are largely on hold; several — stealth
 states, persistent fog, traps, permadeath, no-XP — already align with Brogue and
