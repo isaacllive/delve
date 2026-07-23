@@ -320,7 +320,31 @@
     gate: { color: (p) => p.floor }, // the portcullis prop is drawn separately
     stairsDown: { color: (p) => p.stairsDown },
     stairsUp: { color: (p) => p.stairsUp },
+    // Broader terrain (gap G13). Materials whose colour does not vary by biome
+    // carry their own; deep water is the biome's own water darkened, so it
+    // reads as depth rather than as a different liquid. A secret door is drawn
+    // as wall rock and fills its column, so nothing about the mesh or the
+    // palette gives it away before it is found.
+    deepWater: { color: (p) => darkenHex(p.water, DEEP_WATER_DARKEN) },
+    lava: { color: () => 0xff5a1e }, // molten rock: an ignition source, not decor
+    bog: { color: () => 0x4a3a24 },
+    web: { color: () => 0xd8d8d0 },
+    lichen: { color: () => 0x6f9a4a },
+    bridge: { color: () => 0x7a5a34 },
+    secretDoor: { color: (p) => p.wall, solidColumn: true },
   };
+
+  /** Fraction of the biome's water colour deep water keeps (the rest goes to
+   *  black). Mirrors the same constant in voxelize.ts's palette mapping. */
+  const DEEP_WATER_DARKEN = 0.55;
+
+  /** Scale an 0xRRGGBB colour toward black. */
+  function darkenHex(hex: number, factor: number): number {
+    const r = Math.round(((hex >> 16) & 255) * factor);
+    const g = Math.round(((hex >> 8) & 255) * factor);
+    const b = Math.round((hex & 255) * factor);
+    return (r << 16) | (g << 8) | b;
+  }
 
   function lookOf(kind: string): TerrainLook {
     return TERRAIN_LOOK[kind as TerrainKind] ?? TERRAIN_LOOK.floor;
