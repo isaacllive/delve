@@ -17,7 +17,17 @@
 // of identify/teleportation/aggravate monsters). The catalog grows as the engine
 // gains gases, gear, staffs, etc.
 
-import { makeRng } from './rng.ts';
+import {
+  makeDisguises,
+  identifiedName,
+  type DisguiseSpec,
+  type RunIdentities,
+} from './identify.ts';
+
+// Re-exported so consumers keep importing the run's identity table from the
+// catalog they already use (gameServer, Hud) — identify.ts stays an
+// implementation detail they don't need to know about.
+export type { RunIdentities };
 
 export type ItemCategory = 'potion' | 'scroll' | 'food';
 
@@ -139,6 +149,9 @@ export function kindsOfCategory(category: ItemCategory): ItemKindId[] {
 }
 
 // ── per-run appearances (the disguise) ───────────────────────────────────────
+// The MECHANISM lives in identify.ts (category-agnostic, shared with the item
+// categories still to come). This section only declares what CONSUMABLES hide
+// behind: potions draw colours, scrolls draw titles, food is never disguised.
 
 // Pools are intentionally larger than the current catalog so appearances stay
 // varied and the catalog can grow without immediately exhausting them.
@@ -151,41 +164,28 @@ const SCROLL_TITLES = [
   'OMARIN', 'VYSS', 'NOGRETH', 'ELKATH', 'SURIN', 'PRAXIA', 'DWELMOR', 'AXENTU',
 ];
 
-/** The opaque appearance labels assigned to each item kind for a run. */
-export interface RunIdentities {
-  /** kindId → the label shown while unidentified (colour or scroll title). */
-  labelFor: Record<ItemKindId, string>;
-}
+/** Consumables' disguise rules. Food is absent on purpose — a ration is never a
+ *  mystery, so it has no appearance and always shows its true name. */
+export const CONSUMABLE_DISGUISES: readonly DisguiseSpec[] = [
+  {
+    category: 'potion',
+    kinds: kindsOfCategory('potion'),
+    appearances: POTION_COLORS,
+    format: (label) => `${label} potion`,
+  },
+  {
+    category: 'scroll',
+    kinds: kindsOfCategory('scroll'),
+    appearances: SCROLL_TITLES,
+    format: (label) => `scroll titled "${label}"`,
+  },
+];
 
-/** Seeded Fisher–Yates shuffle (does not mutate the input). */
-function shuffled<T>(arr: readonly T[], seed: string): T[] {
-  const out = arr.slice();
-  const rng = makeRng(seed);
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = rng.int(0, i);
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
-
-/**
- * Build this run's appearance table. Deterministic from the seed, so the server
- * and every client agree on which disguise hides which item without any of it
- * crossing the wire. Potions draw colours, scrolls draw titles; each pool is
- * shuffled and dealt to that category's kinds in catalog order.
- */
+/** Build this run's appearance table for consumables. Deterministic from the
+ *  seed, so the server and every client agree on which disguise hides which item
+ *  without any of it crossing the wire. */
 export function makeIdentities(seed: string): RunIdentities {
-  const labelFor = {} as Record<ItemKindId, string>;
-  const potionLabels = shuffled(POTION_COLORS, `${seed}#appear#potion`);
-  const scrollLabels = shuffled(SCROLL_TITLES, `${seed}#appear#scroll`);
-  let pi = 0;
-  let si = 0;
-  for (const kind of ITEM_KINDS) {
-    // Food is never disguised — only potions and scrolls play the ID game.
-    if (kind.category === 'potion') labelFor[kind.id] = potionLabels[pi++];
-    else if (kind.category === 'scroll') labelFor[kind.id] = scrollLabels[si++];
-  }
-  return { labelFor };
+  return makeDisguises(seed, CONSUMABLE_DISGUISES);
 }
 
 /**
@@ -198,8 +198,5 @@ export function displayName(
   identities: RunIdentities,
   discovered: ReadonlySet<ItemKindId>,
 ): string {
-  const kind = ITEM_KIND_BY_ID[kindId];
-  if (kind.category === 'food' || discovered.has(kindId)) return kind.name;
-  const label = identities.labelFor[kindId];
-  return kind.category === 'potion' ? `${label} potion` : `scroll titled "${label}"`;
+  return identifiedName(kindId, ITEM_KIND_BY_ID[kindId].name, identities, discovered);
 }

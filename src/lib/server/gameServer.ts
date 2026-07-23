@@ -63,6 +63,7 @@ import {
   type HazardField,
 } from '../game/hazards.ts';
 import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
+import { decayStatuses } from '../game/status.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -87,6 +88,7 @@ import {
   headingOf,
   MAX_CHAT_LEN,
   MAX_NAME_LEN,
+  type AimPoint,
   type ClientMsg,
   type HazardCell,
   type LootState,
@@ -240,6 +242,7 @@ function toMonsterState(m: Monster, floor: number, hidden: boolean): MonsterStat
     boss: m.boss,
     state: m.state,
     abilities: m.abilities.length ? [...m.abilities] : undefined,
+    statuses: m.statuses?.length ? m.statuses.map((s) => ({ ...s })) : undefined,
     hidden: hidden || undefined,
   };
 }
@@ -372,6 +375,7 @@ function joinRun(
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
     poison: 0,
+    statuses: [],
     nutrition: STOMACH_SIZE,
     gold: 0,
     inventory: [{ kindId: 'ration', count: 1 }], // Brogue starts you with a ration
@@ -400,6 +404,61 @@ function mHas(m: Monster, ability: string): boolean {
   return m.abilities.includes(ability as (typeof m.abilities)[number]);
 }
 
+// ── actor effects (the shared seam) ──────────────────────────────────────────
+// EXTENSION SEAM. Every source of harm — melee, fire, gas, poison, starvation,
+// a detonating monster, and (next) bolts and status ticks — routes through these
+// two functions instead of each writing `hp -= n; if (hp <= 0) { … }` itself.
+// That inline pattern had drifted into five near-copies; a new damage source
+// used to mean re-deriving permadeath and the death broadcast from scratch.
+//
+// Adding a damage source is now: call damagePlayer / damageMonster with an
+// epitaph. Adding an affliction is: call addStatus. Both are deliberately dumb
+// about WHAT harmed the actor — the rules stay with the system that owns them.
+
+/** How to narrate a blow: the epitaph completes "☠ Name …" and is broadcast
+ *  run-wide if the blow is fatal; `hit` is the private line to a survivor. */
+interface ActorHarm {
+  epitaph: string;
+  hit?: string;
+}
+
+/** Damage a delver. Returns true if this blow killed them (permadeath).
+ *  No-op on the dead, so overlapping systems in one turn can't double-kill. */
+function damagePlayer(run: Run, player: Player, amount: number, harm: ActorHarm): boolean {
+  const st = player.state;
+  if (!st.alive || amount <= 0) return false;
+  st.hp -= amount;
+  if (st.hp > 0) {
+    if (harm.hit) send(player.ws, { t: 'log', text: harm.hit });
+    return false;
+  }
+  st.hp = 0;
+  st.alive = false;
+  broadcast(run, { t: 'log', text: `☠ ${st.name} ${harm.epitaph} on level ${st.level + 1}.` });
+  return true;
+}
+
+/** Damage a monster, resolving its death abilities if it drops. Returns true if
+ *  this blow killed it. `wake` rouses a sleeper — pain is a good alarm clock. */
+function damageMonster(
+  run: Run,
+  floor: number,
+  m: Monster,
+  amount: number,
+  opts: { wake?: boolean } = {},
+): boolean {
+  if (m.hp <= 0 || amount <= 0) return false;
+  m.hp -= amount;
+  if (opts.wake) m.state = 'hunting';
+  if (m.hp > 0) return false;
+  killMonster(run, floor, m);
+  return true;
+}
+
+// Afflicting an actor (addStatus) and expiring afflictions (decayStatuses) are
+// pure mechanism and live in `status.ts`; the server only decides WHEN to call
+// them. Resolving what each status does is gap G2.
+
 /** Remove a slain monster and resolve its death abilities (explodesOnDeath). */
 function killMonster(run: Run, floor: number, m: Monster): void {
   m.hp = 0;
@@ -415,21 +474,14 @@ function killMonster(run: Run, floor: number, m: Monster): void {
         const r = m.row + dr;
         for (const p of run.players.values()) {
           if (p.state.alive && p.state.level === floor && p.state.col === c && p.state.row === r) {
-            p.state.hp -= burst;
-            if (p.state.hp <= 0) {
-              p.state.hp = 0;
-              p.state.alive = false;
-              broadcast(run, { t: 'log', text: `☠ ${p.state.name} was caught in the ${m.name}'s blast on level ${floor + 1}.` });
-            } else {
-              send(p.ws, { t: 'log', text: `The ${m.name} detonates! (−${burst} HP)` });
-            }
+            damagePlayer(run, p, burst, {
+              epitaph: `was caught in the ${m.name}'s blast`,
+              hit: `The ${m.name} detonates! (−${burst} HP)`,
+            });
           }
         }
         const other = monsterAt(run, floor, c, r);
-        if (other && other !== m) {
-          other.hp -= burst;
-          if (other.hp <= 0) killMonster(run, floor, other);
-        }
+        if (other && other !== m) damageMonster(run, floor, other, burst);
         void level;
       }
     }
@@ -519,9 +571,9 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
   }
   let dmg = weaponDamageRoll(weapon, st.strength, run.combatRng);
   if (sneak) dmg *= sneakMultiplier(isDaggerEquipped(weapon));
-  m.hp -= dmg;
 
-  // Acid mounds and the like corrode the weapon that strikes them.
+  // Acid mounds and the like corrode the weapon that strikes them — landing the
+  // blow is what corrodes, so this resolves whether or not the blow is lethal.
   if (weapon && mHas(m, 'corrodesWeapon')) {
     const gi = st.gear.findIndex((g) => g.instId === weapon.instId);
     if (gi >= 0) {
@@ -530,10 +582,9 @@ function attackMonster(run: Run, player: Player, floor: number, m: Monster): voi
     }
   }
 
-  if (m.hp <= 0) {
+  if (damageMonster(run, floor, m, dmg)) {
     const reward = monsterReward(m.damage, m.boss);
     st.gold += reward;
-    killMonster(run, floor, m);
     if (m.boss) {
       run.bossDefeated = true;
       broadcast(run, { t: 'log', text: `${st.name} slays the ${m.name}! The Amulet of Yendor lies exposed. (+${reward}g)` });
@@ -1065,11 +1116,26 @@ const FACING_DELTAS: ReadonlyArray<readonly [number, number]> = [
   [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
 ];
 
-/** Hurl a potion in the delver's facing direction. It flies until it hits a wall
- *  or a monster (or reaches its range), then shatters — incineration ignites,
- *  caustic gasses. Only potions can be thrown; the throw consumes it + IDs the
- *  kind (you watch it break), then the world advances. */
-function handleThrow(run: Run, player: Player, kindId: string): void {
+/** The step a thrown item travels each cell: toward `aim` when the client sent a
+ *  targeting cursor, otherwise straight ahead in the delver's facing direction.
+ *  Aim is CLIENT input, so it is never trusted for the outcome — it only picks a
+ *  heading here, and the flight below still stops at walls, monsters and range. */
+function throwStep(st: PlayerState, aim: AimPoint | undefined): readonly [number, number] {
+  if (aim) {
+    const dc = Math.sign(aim.col - st.col);
+    const dr = Math.sign(aim.row - st.row);
+    if (dc !== 0 || dr !== 0) return [dc, dr];
+    // Aimed at your own feet: fall through and use facing rather than stalling.
+  }
+  return FACING_DELTAS[Math.round(st.facing / (Math.PI / 4)) & 7];
+}
+
+/** Hurl a potion at an aimed cell (or in the delver's facing direction). It
+ *  flies until it hits a wall or a monster (or reaches its range), then
+ *  shatters — incineration ignites, caustic gasses. Only potions can be thrown;
+ *  the throw consumes it + IDs the kind (you watch it break), then the world
+ *  advances. */
+function handleThrow(run: Run, player: Player, kindId: string, aim?: AimPoint): void {
   const st = player.state;
   if (!st.alive || st.level < 0 || !isItemKind(kindId)) return;
   if (ITEM_KIND_BY_ID[kindId].category !== 'potion') return; // only potions fly
@@ -1077,7 +1143,7 @@ function handleThrow(run: Run, player: Player, kindId: string): void {
   if (!stack || stack.count <= 0) return;
 
   const level = getLevel(run.dungeon, st.level);
-  const [dc, dr] = FACING_DELTAS[Math.round(st.facing / (Math.PI / 4)) & 7];
+  const [dc, dr] = throwStep(st, aim);
   let cc = st.col;
   let rr = st.row;
   for (let k = 0; k < THROW_RANGE; k++) {
@@ -1159,14 +1225,10 @@ function hazardHitPlayer(run: Run, floor: number, player: Player, field: HazardF
     cause = cause ? 'fire and gas' : 'caustic gas';
   }
   if (dmg <= 0) return;
-  st.hp -= dmg;
-  if (st.hp <= 0 && st.alive) {
-    st.hp = 0;
-    st.alive = false;
-    broadcast(run, { t: 'log', text: `☠ ${st.name} was consumed by ${cause} on level ${floor + 1}.` });
-  } else {
-    send(player.ws, { t: 'log', text: `You are seared by ${cause}! (−${dmg} HP)` });
-  }
+  damagePlayer(run, player, dmg, {
+    epitaph: `was consumed by ${cause}`,
+    hit: `You are seared by ${cause}! (−${dmg} HP)`,
+  });
 }
 
 /** Advance a floor's fire/gas one turn and burn everything standing in it. */
@@ -1186,11 +1248,7 @@ function stepFloorHazards(run: Run, floor: number): void {
     const dmg =
       (fire > 0 ? Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire)) : 0) +
       (gas && gas.kind === 'caustic' ? Math.max(1, Math.round(CAUSTIC_DAMAGE_PER_TURN * Math.min(1, gas.concentration))) : 0);
-    if (dmg > 0) {
-      m.hp -= dmg;
-      m.state = 'hunting'; // pain wakes it
-      if (m.hp <= 0) killMonster(run, floor, m);
-    }
+    damageMonster(run, floor, m, dmg, { wake: true });
   }
 }
 
@@ -1226,14 +1284,11 @@ function monsterBite(run: Run, floor: number, m: Monster, target: Player): void 
     return;
   }
   const dmg = rollDamage(damageRange(m.damage, 1), 0, run.combatRng);
-  st.hp -= dmg;
-  if (st.hp <= 0 && st.alive) {
-    st.hp = 0;
-    st.alive = false;
-    broadcast(run, { t: 'log', text: `☠ ${st.name} was slain by a ${m.name} on level ${floor + 1}.` });
-    return;
-  }
-  send(target.ws, { t: 'log', text: `The ${m.name} hits you for ${dmg}.` });
+  const slain = damagePlayer(run, target, dmg, {
+    epitaph: `was slain by a ${m.name}`,
+    hit: `The ${m.name} hits you for ${dmg}.`,
+  });
+  if (slain) return;
   // Venomous monsters leave poison that saps health over the coming turns.
   if (mHas(m, 'poisons')) {
     const stacks = 3 + Math.floor(m.damage / 2);
@@ -1358,22 +1413,16 @@ function takeMonsterTurns(run: Run, floor: number, elapsed: number): void {
 
 /** Poison tick: a poisoned delver loses 1 HP per turn until it decays to 0.
  *  Resolves permadeath if the venom finishes them. */
-function maybePoison(run: Run, floor: number, player: Player): void {
+function maybePoison(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive || st.poison <= 0) return;
   st.poison -= 1;
-  st.hp -= 1;
-  if (st.hp <= 0) {
-    st.hp = 0;
-    st.alive = false;
-    st.poison = 0;
-    broadcast(run, { t: 'log', text: `☠ ${st.name} succumbed to poison on level ${floor + 1}.` });
-  }
+  if (damagePlayer(run, player, 1, { epitaph: 'succumbed to poison' })) st.poison = 0;
 }
 
 /** Hunger tick: nutrition drains 1 per turn; once empty, starvation gnaws 1 HP
  *  per turn (permadeath if it finishes them). Warns as it crosses thresholds. */
-function maybeStarve(run: Run, floor: number, player: Player): void {
+function maybeStarve(run: Run, player: Player): void {
   const st = player.state;
   if (!st.alive) return;
   const before = st.nutrition;
@@ -1386,14 +1435,7 @@ function maybeStarve(run: Run, floor: number, player: Player): void {
   } else if (before > FAINT_THRESHOLD && st.nutrition <= FAINT_THRESHOLD) {
     send(player.ws, { t: 'log', text: `You are about to faint from starvation!` });
   }
-  if (st.nutrition <= 0) {
-    st.hp -= 1;
-    if (st.hp <= 0) {
-      st.hp = 0;
-      st.alive = false;
-      broadcast(run, { t: 'log', text: `☠ ${st.name} starved to death on level ${floor + 1}.` });
-    }
-  }
+  if (st.nutrition <= 0) damagePlayer(run, player, 1, { epitaph: 'starved to death' });
 }
 
 /** Passive regeneration: a delver heals `maxHP` over TURNS_FOR_FULL_REGEN turns
@@ -1432,9 +1474,15 @@ const WORLD_SYSTEMS: WorldSystem[] = [
   // Fire spreads and gas diffuses on the delver's floor, burning anything in it.
   ({ run, player }) => stepFloorHazards(run, player.state.level),
   // Hunger drains and poison saps, then the delver regenerates a sliver.
-  ({ run, player }) => maybeStarve(run, player.state.level, player),
-  ({ run, player }) => maybePoison(run, player.state.level, player),
+  ({ run, player }) => maybeStarve(run, player),
+  ({ run, player }) => maybePoison(run, player),
   ({ player }) => maybeRegen(player),
+  // Timed statuses tick down on the delver and on every monster sharing the
+  // floor, so an affliction lapses at the same rate for both sides of a fight.
+  ({ run, player }) => {
+    decayStatuses(player.state);
+    for (const m of monstersOn(run, player.state.level)) decayStatuses(m);
+  },
 ];
 
 /** End a player's turn: the action is done, so time passes — every world system
@@ -1491,7 +1539,7 @@ const INTENTS: IntentRegistry = {
   interact: ({ run, player }) => handleInteract(run, player),
   'use-item': ({ run, player }, msg) => handleUseItem(run, player, msg.kindId),
   equip: ({ run, player }, msg) => handleEquip(run, player, msg.instId),
-  throw: ({ run, player }, msg) => handleThrow(run, player, msg.kindId),
+  throw: ({ run, player }, msg) => handleThrow(run, player, msg.kindId, msg.aim),
   wait: ({ run, player }) => handleWait(run, player),
   descend: ({ run, player }) => descendFromCamp(run, player),
   // Only the potion shop is stocked; guard the item so an unknown value can't be honoured.

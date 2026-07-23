@@ -17,7 +17,7 @@
   import type { DungeonLevel } from '$lib/game/dungeon.ts';
   import type { HazardCell, LootState, MonsterAwareness, MonsterState, PlayerState, TrapState } from '$lib/game/protocol.ts';
   import { cellIndex } from '$lib/game/grid.ts';
-  import { occluderHeight, WALL_HEIGHT } from '$lib/game/terrain.ts';
+  import { occluderHeight, WALL_HEIGHT, type TerrainKind } from '$lib/game/terrain.ts';
   import { hasLineOfSight } from '$lib/game/los.ts';
   import { cellVisibility, type VisionSource } from '$lib/game/vision.ts';
   import { cellLitByLights } from '$lib/game/lighting.ts';
@@ -296,18 +296,38 @@
   const camPrev = { x: 0, y: 0, z: 0 };
   let camInit = false;
 
-  // ── terrain palette (per biome; supplied by the level) ────────────────────
+  // ── terrain look registry (per biome; palette supplied by the level) ──────
+  // ONE row per terrain kind: how it is coloured, and whether it fills its whole
+  // column with solid rock. This mirrors TERRAIN_PROPS in terrain.ts, which owns
+  // the same kinds' RULES — so a new terrain kind (deep water, lava, chasm, bog,
+  // webs, bridges) is one row in each table, rather than a hunt through this
+  // component for every `kind === …` branch it needs to appear in.
+  interface TerrainLook {
+    /** This kind's colour, drawn from the level's biome palette. */
+    color: (p: DungeonLevel['palette']) => number;
+    /** Fills the entire column with rock (walls), instead of a floor mass up to
+     *  the walkable surface. */
+    solidColumn?: boolean;
+  }
+
+  const TERRAIN_LOOK: Record<TerrainKind, TerrainLook> = {
+    floor: { color: (p) => p.floor },
+    wall: { color: (p) => p.wall, solidColumn: true },
+    pit: { color: (p) => p.pit },
+    water: { color: (p) => p.water },
+    ledge: { color: (p) => p.ledge },
+    grass: { color: () => 0x4c7a3a }, // flammable groundcover (fuel for fire)
+    gate: { color: (p) => p.floor }, // the portcullis prop is drawn separately
+    stairsDown: { color: (p) => p.stairsDown },
+    stairsUp: { color: (p) => p.stairsUp },
+  };
+
+  function lookOf(kind: string): TerrainLook {
+    return TERRAIN_LOOK[kind as TerrainKind] ?? TERRAIN_LOOK.floor;
+  }
+
   function palColor(p: DungeonLevel['palette'], kind: string): number {
-    switch (kind) {
-      case 'wall': return p.wall;
-      case 'ledge': return p.ledge;
-      case 'pit': return p.pit;
-      case 'water': return p.water;
-      case 'stairsDown': return p.stairsDown;
-      case 'stairsUp': return p.stairsUp;
-      case 'grass': return 0x4c7a3a; // flammable groundcover (fuel for fire)
-      default: return p.floor;
-    }
+    return lookOf(kind).color(p);
   }
   // Current level's ceiling-rock tint (set per build from the biome palette).
   let curRock = CEIL_ROCK;
@@ -323,7 +343,7 @@
   /** [bottom, top] extents of a cell's GROUND block: the solid floor mass up to
    *  the walkable surface (`elevation`), or the full solid column for a wall. */
   function groundExtents(kind: string, elevation: number): [number, number] {
-    if (kind === 'wall') return [VOX_BASE, VOX_TOP]; // solid rock column
+    if (lookOf(kind).solidColumn) return [VOX_BASE, VOX_TOP]; // solid rock column
     return [VOX_BASE, elevation]; // floor mass up to the surface you stand on
   }
 
@@ -334,7 +354,7 @@
    *  short and never carved through). */
   function columnBlocks(kind: string, elevation: number): [number, number][] {
     const [gb, gt] = groundExtents(kind, elevation);
-    if (kind !== 'wall') return [[gb, gt]];
+    if (!lookOf(kind).solidColumn) return [[gb, gt]];
     const GROUND = 0; // walkable reference level; below it is buried rock
     const blocks: [number, number][] = [[gb, GROUND]];
     for (let y = GROUND; y < gt - 1e-6; y += 1) blocks.push([y, Math.min(y + 1, gt)]);

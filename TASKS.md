@@ -133,6 +133,29 @@ systems). 382 tests, 0 type errors throughout.
       the curve is sound — the one "outlier" (the slow Ogre) is balanced by its
       200-tick attack — so the guard is now in place rather than blind tweaks.
 
+### Next: the gap catalog (G1–G20)
+The remaining fidelity work is tracked as a numbered backlog in
+**`docs/brogue-fidelity.md` §3** (what each gap is, effort, dependencies) and
+scheduled in **`docs/parallelization.md`** (waves, file ownership, status).
+Tick items *there*, not here — this section is only a pointer.
+
+- [x] **Phase 0.2 (contracts pass)** — LANDED. Identification engine split into
+      pure `identify.ts` (so G6–G10 add a *file* per item category, not edits to
+      one catalog) · status/aim types on `protocol.ts` · **actor-effect seam**
+      `damagePlayer`/`damageMonster` replacing five near-copies of the
+      damage-and-death branch · pure `status.ts` mechanism + per-turn decay
+      world-system · `TERRAIN_PROPS` + renderer `TERRAIN_LOOK` registries so a
+      new terrain kind is two rows. 439 tests, 0 type errors, combat verified
+      live over the wire. Bolt hook deferred to G1 (its shape depends on
+      `bolt.ts`); message-log types deferred to G17.
+- **Wave 3 (4 parallel, next)** — G1 bolt engine · G2 status *resolution*
+  (mechanism now exists) · G3 scent map + real monster AI · G13 terrain breadth.
+- **Then** — breadth (G4/G6/G9/G15/G18), texture (G7/G8/G10/G14/G17/G19/G20),
+  authored (G16/G12/G5), metering (G11) last.
+- **Two audit findings owed regression tests**: confusion gas is simulated but
+  never affects any actor (`gameServer.ts` only reads `caustic`), and
+  `pathfind.ts` is client-only — monsters greedy-step and stick on walls.
+
 *(The items below predate the refocus and are largely on hold; several — stealth
 states, persistent fog, traps, permadeath, no-XP — already align with Brogue and
 carry forward.)*

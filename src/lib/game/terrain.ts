@@ -49,20 +49,52 @@ export const PIT_DEPTH = -2;
 /** Depth of a water tile. */
 export const WATER_DEPTH = -0.35;
 
+// ── the terrain kind registry ────────────────────────────────────────────────
+// ONE row per kind, and every derived question below (default elevation, does it
+// block movement, does it occlude sight, is entering it a hazard, does it burn)
+// is answered by reading this table. Previously each of those lived in its own
+// per-kind `switch`/`Set`, so adding a terrain kind meant finding all five and
+// risking a silent default. Adding a kind is now a single row — which is what
+// makes the terrain-breadth work (deep water, lava, chasm, bog, webs, bridges;
+// gap G13) additive instead of a five-way diff.
+
+/** How a kind blocks sight: `full` = wall-tall regardless of elevation,
+ *  `height` = occludes up to its own (positive) elevation, `none` = never. */
+export type OccluderMode = 'full' | 'height' | 'none';
+
+export interface TerrainProps {
+  /** Default elevation of a freshly-made cell of this kind. */
+  elevation: number;
+  /** Blocks a walker from entering (walls, closed gates). */
+  blocksMove: boolean;
+  /** How this kind occludes line of sight. */
+  occluder: OccluderMode;
+  /** Entering it is a fall/dunk event the move handler resolves, not a block. */
+  entryHazard: 'pit' | 'water' | null;
+  /** Fire can ignite, spread through, and consume it (burns away to floor). */
+  flammable: boolean;
+}
+
+export const TERRAIN_PROPS: Record<TerrainKind, TerrainProps> = {
+  floor: { elevation: 0, blocksMove: false, occluder: 'height', entryHazard: null, flammable: false },
+  wall: { elevation: WALL_HEIGHT, blocksMove: true, occluder: 'full', entryHazard: null, flammable: false },
+  pit: { elevation: PIT_DEPTH, blocksMove: false, occluder: 'height', entryHazard: 'pit', flammable: false },
+  water: { elevation: WATER_DEPTH, blocksMove: false, occluder: 'height', entryHazard: 'water', flammable: false },
+  ledge: { elevation: LEDGE_HEIGHT, blocksMove: false, occluder: 'height', entryHazard: null, flammable: false },
+  // Groundcover: walkable and sightless, but it BURNS — the fuel the fire
+  // simulation (hazards.ts) spreads through.
+  grass: { elevation: 0, blocksMove: false, occluder: 'height', entryHazard: null, flammable: true },
+  // A vault portcullis: blocks movement like a wall until its lever is pulled
+  // (the server swaps it to floor), but sits at elevation 0 so you can see
+  // through the bars to the reward behind.
+  gate: { elevation: 0, blocksMove: true, occluder: 'height', entryHazard: null, flammable: false },
+  stairsDown: { elevation: 0, blocksMove: false, occluder: 'height', entryHazard: null, flammable: false },
+  stairsUp: { elevation: 0, blocksMove: false, occluder: 'height', entryHazard: null, flammable: false },
+};
+
 /** Canonical cell for a kind (its default elevation). */
 export function makeCell(kind: TerrainKind): TerrainCell {
-  switch (kind) {
-    case 'wall':
-      return { kind, elevation: WALL_HEIGHT };
-    case 'ledge':
-      return { kind, elevation: LEDGE_HEIGHT };
-    case 'pit':
-      return { kind, elevation: PIT_DEPTH };
-    case 'water':
-      return { kind, elevation: WATER_DEPTH };
-    default:
-      return { kind, elevation: 0 };
-  }
+  return { kind, elevation: TERRAIN_PROPS[kind].elevation };
 }
 
 /** A single dungeon level: a cols×rows grid of terrain cells, row-major. */
@@ -89,9 +121,7 @@ export function cellAt(level: Level, col: number, row: number): TerrainCell | un
 export function blocksMove(level: Level, col: number, row: number): boolean {
   const c = cellAt(level, col, row);
   if (!c) return true;
-  // A closed vault gate blocks like a wall; the server swaps it to floor when its
-  // lever is pulled, so passage opens up without any special-case here.
-  return c.kind === 'wall' || c.kind === 'gate';
+  return TERRAIN_PROPS[c.kind].blocksMove;
 }
 
 /** Occluder height at a cell for sight. 0 == not an occluder. Walls stand
@@ -100,33 +130,25 @@ export function blocksMove(level: Level, col: number, row: number): boolean {
 export function occluderHeight(level: Level, col: number, row: number): number {
   const c = cellAt(level, col, row);
   if (!c) return WALL_HEIGHT; // treat off-map as solid
-  if (c.kind === 'wall') return WALL_HEIGHT;
-  if (c.elevation > 0) return c.elevation; // ledges / platforms
-  return 0;
+  const mode = TERRAIN_PROPS[c.kind].occluder;
+  if (mode === 'full') return WALL_HEIGHT;
+  if (mode === 'none') return 0;
+  // 'height': raised ledges/platforms occlude up to their own elevation, so a
+  // higher viewer sees over them. Sunken cells (pits/water) never occlude.
+  return c.elevation > 0 ? c.elevation : 0;
 }
 
 /** Is entering this cell a hazard (a fall / dunk)? */
 export function hazardAt(level: Level, col: number, row: number): 'pit' | 'water' | null {
   const c = cellAt(level, col, row);
-  if (!c) return null;
-  if (c.kind === 'pit') return 'pit';
-  if (c.kind === 'water') return 'water';
-  return null;
+  return c ? TERRAIN_PROPS[c.kind].entryHazard : null;
 }
 
 // ── flammability (fuel for the fire simulation, hazards.ts) ──────────────────
-// Grass is a walkable, sightless, non-hazard floor variant that FIRE can ignite,
-// spread through, and consume (Brogue: grass/bog/bridges/webs burn). The set is
-// the single source of truth for "what fire can catch"; extend it (oil, bog…)
-// rather than scattering kind checks through the sim. `flammable` is a derived
-// flag of the terrain kind, in the same spirit as blocksMove / hazardAt above.
-
-/** Terrain kinds fire can ignite and burn away. Grass to start (per Brogue). */
-const FLAMMABLE_KINDS: ReadonlySet<TerrainKind> = new Set<TerrainKind>(['grass']);
 
 /** The `flammable` flag for a terrain kind — can fire catch here? */
 export function isFlammableKind(kind: TerrainKind): boolean {
-  return FLAMMABLE_KINDS.has(kind);
+  return TERRAIN_PROPS[kind].flammable;
 }
 
 /** Is the cell at (col,row) flammable fuel? Out-of-bounds is not. */

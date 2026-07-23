@@ -20,6 +20,50 @@ export interface InvStack {
   count: number;
 }
 
+// ── status effects ───────────────────────────────────────────────────────────
+// The wire contract for timed afflictions and boons. Declared here (like
+// MonsterAwareness below) so client and server share one vocabulary; the RULES
+// — what each status does per turn, how it stacks, how it decays — belong to
+// the pure `status.ts` module (gap G2), which re-exports this type rather than
+// defining a parallel one.
+//
+// The full Brogue set is declared up front deliberately: it costs nothing on the
+// wire (unset statuses are simply absent) and it means adding "confusion
+// actually scrambles your steps" is a change to ONE module instead of a change
+// to the protocol, the server, the HUD, and the renderer at once.
+
+export type StatusKind =
+  | 'poison' // loses HP per turn (the only status resolved today)
+  | 'confused' // movement veers randomly
+  | 'hallucinating' // monsters/items are drawn as the wrong things
+  | 'levitating' // floats over pits, water, lava and chasms
+  | 'telepathic' // senses every monster on the level, through walls
+  | 'hasted' // acts twice as often (energy.ts HASTE_TICKS)
+  | 'slowed' // acts half as often (energy.ts SLOW_TICKS)
+  | 'darkened' // torch radius crushed
+  | 'paralyzed' // cannot act at all
+  | 'discordant' // attacks its own allies
+  | 'nauseous' // may vomit instead of acting
+  | 'shielded' // absorbs incoming damage
+  | 'negated' // magical abilities suppressed
+  | 'fireImmune'; // ignores fire damage
+
+/** One active status on an actor, with the turns remaining before it lapses. */
+export interface ActorStatus {
+  kind: StatusKind;
+  /** Turns left. Decremented once per turn; the status drops at 0. */
+  turns: number;
+  /** Optional magnitude (shield points, poison stacks) — semantics per kind. */
+  magnitude?: number;
+}
+
+/** A targeted cell for a thrown item or a zapped bolt. The server validates and
+ *  clamps it (range, line of sight); the client never resolves the effect. */
+export interface AimPoint {
+  col: number;
+  row: number;
+}
+
 /** A player's live state, as broadcast to everyone in the run. */
 export interface PlayerState {
   id: string;
@@ -42,8 +86,12 @@ export interface PlayerState {
   /** Strength: gates weapon/armor requirements and scales combat via netEnchant
    *  (combat.ts). Starts at 12 and grows ONLY by drinking a Potion of Strength. */
   strength: number;
-  /** Remaining poison — 1 HP lost per turn until it decays to 0 (0 = unpoisoned). */
+  /** Remaining poison — 1 HP lost per turn until it decays to 0 (0 = unpoisoned).
+   *  Predates `statuses` and stays the authoritative source for poison; G2 folds
+   *  it into the status layer rather than running two poison clocks at once. */
   poison: number;
+  /** Timed afflictions and boons currently on this delver. */
+  statuses: ActorStatus[];
   /** Stomach fullness (nutrition). Drains ~1/turn; 0 = starving (see character.ts). */
   nutrition: number;
   /** Gold carried this expedition (lost on death). */
@@ -84,6 +132,9 @@ export interface MonsterState {
   state: MonsterAwareness;
   /** Notable ability flags, for the client's monster tint/glyph. */
   abilities?: string[];
+  /** Timed afflictions on this monster (omitted when it has none, to keep the
+   *  per-floor monster broadcast small). */
+  statuses?: ActorStatus[];
   /** True when this monster is currently concealed (aquatic ambusher lurking in
    *  deep water) — the client skips rendering it until it surfaces to strike. */
   hidden?: boolean;
@@ -151,7 +202,10 @@ export type ClientMsg =
   | { t: 'interact' } // use stairs / portal / shop under-or-adjacent
   | { t: 'use-item'; kindId: ItemKindId } // quaff/read a carried item by kind
   | { t: 'equip'; instId: string } // equip/unequip a carried gear instance
-  | { t: 'throw'; kindId: ItemKindId } // hurl a potion in the facing direction
+  // Hurl a potion. `aim` targets a cell (the client's targeting cursor, gap
+  // G16); without it the throw flies in the facing direction, which is what the
+  // current HUD sends. The server validates range and line of sight either way.
+  | { t: 'throw'; kindId: ItemKindId; aim?: AimPoint }
   | { t: 'wait' } // pass a turn in place (rest)
   | { t: 'descend' } // leave the out-of-dungeon hub → enter floor 0
   | { t: 'buy'; item: 'potion' } // buy from a hub shop (menu-driven, no walking)
