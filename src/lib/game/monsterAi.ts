@@ -32,7 +32,7 @@
 
 import { chebyshev, cellIndex, DIRS8, type Cell } from './grid.ts';
 import { hasLineOfSight } from './los.ts';
-import { blocksMove, hazardAt, occluderHeight, type Level } from './terrain.ts';
+import { blocksMove, occluderHeight, propsAt, type Level } from './terrain.ts';
 import { findPath, type PathOptions } from './pathfind.ts';
 import { strongestScentNeighbour, type ScentField } from './scent.ts';
 import type { Monster, MonsterAbility } from './monsters.ts';
@@ -105,14 +105,18 @@ function mobilityOf(m: Monster): Mobility {
 }
 
 /** Terrain test only: could this monster stand on (col,row) if it were empty?
- *  Asks terrain.ts for the derived entry-hazard rather than testing kinds, so
- *  new liquids/chasms answer correctly the day they're added. */
+ *  Asks terrain.ts for the derived PROPERTIES rather than testing kinds, so the
+ *  liquids and chasms added since answer correctly without a change here. */
 function canStand(level: Level, mob: Mobility, col: number, row: number): boolean {
-  const hazard = hazardAt(level, col, row);
-  if (mob.aquatic) return hazard === 'water'; // eels never leave the water
+  const props = propsAt(level, col, row);
+  // Eels never leave the water — either depth of it.
+  if (mob.aquatic) return props.submersion !== 'none';
   if (blocksMove(level, col, row)) return false; // walls, closed vault gates, off-map
   // Walkers won't step into a chasm; fliers cross it (that is what `flies` means).
-  if (!mob.flies && hazard === 'pit') return false;
+  if (!mob.flies && props.descends) return false;
+  // Nothing walks knowingly into lava. Fliers included: `flies` clears what is
+  // underfoot, not what is molten.
+  if (props.contactDamage > 0) return false;
   return true;
 }
 
@@ -134,7 +138,7 @@ function pathOptions(ctx: MonsterContext, mob: Mobility): PathOptions {
   if (mob.aquatic) {
     const { cols, cells } = ctx.level;
     for (let i = 0; i < cells.length; i++) {
-      if (hazardAt(ctx.level, i % cols, (i / cols) | 0) !== 'water') blocked.add(i);
+      if (propsAt(ctx.level, i % cols, (i / cols) | 0).submersion === 'none') blocked.add(i);
     }
   }
   return { blocked, avoidHazards: !mob.flies && !mob.aquatic };

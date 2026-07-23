@@ -8,10 +8,18 @@ import { decideMonsterAction, type AiTarget, type MonsterAction } from './monste
 /** The server's aggro radius (gameServer AGGRO), mirrored for these tests. */
 const AGGRO = 9;
 
-/** Build a Level from an ASCII map: '#'=wall, '.'=floor, 'o'=pit, '~'=water. */
+/** Build a Level from an ASCII map: '#'=wall, '.'=floor, 'o'=pit, '~'=water,
+ *  '≈'=deep water, '!'=lava. */
 function level(rows: string[]): Level {
   const cols = rows[0].length;
-  const kindOf: Record<string, TerrainKind> = { '#': 'wall', '.': 'floor', o: 'pit', '~': 'water' };
+  const kindOf: Record<string, TerrainKind> = {
+    '#': 'wall',
+    '.': 'floor',
+    o: 'pit',
+    '~': 'water',
+    '≈': 'deepWater',
+    '!': 'lava',
+  };
   const cells = [];
   for (const line of rows) {
     for (const ch of line) cells.push(makeCell(kindOf[ch] ?? 'floor'));
@@ -326,6 +334,45 @@ describe('ability flags', () => {
       expect(cellAt(lvl, c.col, c.row)!.kind).toBe('water');
     }
     expect(run.attacked).toBe(true); // still gets its ambush in from the shallows
+  });
+
+  // ── merge seams: the AI was written against the terrain kinds that existed
+  // before deep water and lava were added. These pin the properties it must ask
+  // about, so a future terrain kind cannot silently reopen the gap.
+
+  it('an aquatic monster swims in deep water too, not just the shallows', () => {
+    // An eel confined to the shallow rim could never reach open water — the very
+    // place it is supposed to lurk.
+    const lvl = level([
+      '.....',
+      '.~≈~.',
+      '.~≈~.',
+      '.....',
+    ]);
+    const m = monster(1, 1, { abilities: ['aquatic'] });
+    const run = chase(lvl, m, delver(4, 0), { turns: 15, warmup: 30 });
+    expect(run.visited.length).toBeGreaterThan(0);
+    for (const c of run.visited) {
+      expect(['water', 'deepWater']).toContain(cellAt(lvl, c.col, c.row)!.kind);
+    }
+    expect(run.visited.some((c) => cellAt(lvl, c.col, c.row)!.kind === 'deepWater')).toBe(true);
+  });
+
+  it('nothing walks into lava — not even a flier', () => {
+    // `flies` clears what is underfoot, not what is molten.
+    const lvl = level([
+      '.....',
+      '.!!!.',
+      '.....',
+    ]);
+    const target = delver(2, 2);
+    for (const abilities of [[], ['flies'] as const]) {
+      const m = monster(2, 0, { abilities: [...abilities] as Monster['abilities'] });
+      const run = chase(lvl, m, target, { turns: 12, warmup: 30 });
+      for (const c of run.visited) {
+        expect(cellAt(lvl, c.col, c.row)!.kind, `abilities=${abilities}`).not.toBe('lava');
+      }
+    }
   });
 });
 

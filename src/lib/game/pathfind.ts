@@ -8,7 +8,7 @@
 // every step a path yields is one the server will honour. Optional avoid-sets
 // let callers route around known hazards (pits) and spotted traps.
 
-import { blocksMove, hazardAt, type Level } from './terrain.ts';
+import { blocksMove, propsAt, type Level } from './terrain.ts';
 import { cellIndex } from './grid.ts';
 
 export interface Step {
@@ -17,8 +17,14 @@ export interface Step {
 }
 
 export interface PathOptions {
-  /** Route around open pits/chasms (they drop you a floor). Water is fine. */
+  /** Route around terrain that drops you a floor (pits/chasms). A flier turns
+   *  this off — that is what flight is for. Water is fine; you just get wet. */
   avoidHazards?: boolean;
+  /** Route around terrain that injures whoever enters it (lava). Separate from
+   *  `avoidHazards` on purpose: flight clears what is underfoot, not what is
+   *  molten, so a flier still needs this on. Defaults to on for that reason —
+   *  a caller must opt IN to routing something through harm. */
+  allowHarmful?: boolean;
   /** Extra cell indices to treat as impassable (e.g. revealed armed traps). */
   blocked?: Set<number>;
 }
@@ -33,7 +39,11 @@ const DIRS: readonly [number, number][] = [
 function passable(level: Level, col: number, row: number, opts: PathOptions): boolean {
   if (blocksMove(level, col, row)) return false;
   if (opts.blocked?.has(cellIndex(col, row, level.cols))) return false;
-  if (opts.avoidHazards && hazardAt(level, col, row) === 'pit') return false;
+  // Ask the terrain registry what entering COSTS rather than naming kinds, so a
+  // newly-added lethal terrain is routed around the day it lands.
+  const props = propsAt(level, col, row);
+  if (opts.avoidHazards && props.descends) return false;
+  if (!opts.allowHarmful && props.contactDamage > 0) return false;
   return true;
 }
 
