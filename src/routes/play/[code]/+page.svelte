@@ -3,6 +3,8 @@
   import { GameClient } from '$lib/net.svelte.ts';
   import { generateDungeon, getLevel, CAMP_DEPTH, type Dungeon } from '$lib/game/dungeon.ts';
   import { interactablePrompt } from '$lib/game/interactions.ts';
+  import { findPath, nearestUnexplored, type Step } from '$lib/game/pathfind.ts';
+  import { cellIndex } from '$lib/game/grid.ts';
   import DungeonView3D from '$lib/components/DungeonView3D.svelte';
   import Hud from '$lib/components/Hud.svelte';
   import HubScreen from '$lib/components/HubScreen.svelte';
@@ -77,6 +79,98 @@
     return [Math.round(Math.sin(a)), Math.round(-Math.cos(a))];
   }
 
+  // ── Auto-travel ─────────────────────────────────────────────────────────────
+  // Click a tile (preview, then a second click to commit) or press X (auto-
+  // explore) / G (go to the down-stairs); the client plots a route over the
+  // locally-known geometry and walks it one `move` intent at a time — which, on
+  // the turn-based server, is one turn per step. Stops on arrival, a blocked
+  // step, a nearby hunting foe, or any manual key.
+  const TRAVEL_STEP_MS = 165;
+  const TRAVEL_LEAD_MS = 220;
+  let travel = $state<{ path: Step[]; i: number; active: boolean } | null>(null);
+  let travelTimer: ReturnType<typeof setTimeout> | null = null;
+  let travelSentFrom: Step | null = null;
+  let explored: boolean[] | null = null;
+  let exploredDepth = -99;
+
+  function cancelTravel(): void {
+    travel = null;
+    travelSentFrom = null;
+    if (travelTimer) {
+      clearTimeout(travelTimer);
+      travelTimer = null;
+    }
+  }
+
+  // Remaining route steps from the delver's current cell, drawn as an on-floor trail.
+  const travelTrail = $derived.by(() => {
+    const t = travel;
+    const m = client.me;
+    if (!t || !m) return [];
+    const idx = t.path.findIndex((s) => s.col === m.col && s.row === m.row);
+    return idx >= 0 ? t.path.slice(idx + 1) : t.path;
+  });
+
+  /** Revealed-but-armed traps on the current floor, as cell indices to avoid. */
+  function armedTrapCells(): Set<number> {
+    const s = new Set<number>();
+    if (currentLevel) {
+      for (const t of client.traps) if (!t.sprung) s.add(cellIndex(t.col, t.row, currentLevel.cols));
+    }
+    return s;
+  }
+
+  function plotPath(col: number, row: number): Step[] | null {
+    const m = client.me;
+    if (!currentLevel || !m || !m.alive || atHub) return null;
+    const path = findPath(currentLevel, { col: m.col, row: m.row }, { col, row }, { avoidHazards: true, blocked: armedTrapCells() });
+    return path && path.length ? path : null;
+  }
+
+  function previewTravelTo(col: number, row: number): void {
+    const path = plotPath(col, row);
+    cancelTravel();
+    if (path) travel = { path, i: 0, active: false };
+  }
+  function beginTravelTo(col: number, row: number): void {
+    const path = plotPath(col, row);
+    cancelTravel();
+    if (!path) return;
+    travel = { path, i: 0, active: true };
+    travelTimer = setTimeout(walkStep, TRAVEL_LEAD_MS);
+  }
+
+  function walkStep(): void {
+    travelTimer = null;
+    const t = travel;
+    const m = client.me;
+    if (!t || !t.active || !m || !m.alive || atHub) return cancelTravel();
+    // Don't sleepwalk into a foe that has woken and is closing in.
+    if (client.monsters.some((mo) => mo.state === 'hunting' && Math.abs(mo.col - m.col) <= 6 && Math.abs(mo.row - m.row) <= 6)) return cancelTravel();
+    const target = t.path[t.i];
+    if (m.col === target.col && m.row === target.row) {
+      if (t.i >= t.path.length - 1) return cancelTravel(); // arrived
+      t.i += 1;
+    } else if (travelSentFrom && m.col === travelSentFrom.col && m.row === travelSentFrom.row) {
+      return cancelTravel(); // last move didn't take → blocked
+    }
+    const s = t.path[t.i];
+    travelSentFrom = { col: m.col, row: m.row };
+    client.move(Math.sign(s.col - m.col), Math.sign(s.row - m.row));
+    travelTimer = setTimeout(walkStep, TRAVEL_STEP_MS);
+  }
+
+  function autoExplore(): void {
+    const m = client.me;
+    if (!currentLevel || !m || !explored || exploredDepth !== m.level) return;
+    const target = nearestUnexplored(currentLevel, { col: m.col, row: m.row }, explored, { avoidHazards: true, blocked: armedTrapCells() });
+    if (target) beginTravelTo(target.col, target.row);
+  }
+  function travelToStairs(): void {
+    const sd = currentLevel?.stairsDown;
+    if (sd) beginTravelTo(sd.col, sd.row);
+  }
+
   function onKey(e: KeyboardEvent) {
     if (typingInField()) return;
     // Backtick toggles the debug menu anywhere (hub or dungeon).
@@ -89,6 +183,20 @@
     // are inert so stray keystrokes can't shuffle the camp token.
     if (atHub) return;
     const key = e.key.toLowerCase();
+    // Auto-travel: X = auto-explore (or cancel an active route), G = go to the
+    // down-stairs. Any OTHER action key cancels an in-progress route first.
+    if (key === 'x') {
+      e.preventDefault();
+      if (travel) cancelTravel();
+      else autoExplore();
+      return;
+    }
+    if (key === 'g') {
+      e.preventDefault();
+      travelToStairs();
+      return;
+    }
+    if (travel) cancelTravel();
     if (key === ' ' || key === 'e') {
       e.preventDefault();
       client.interact();
@@ -126,6 +234,7 @@
   });
   onDestroy(() => {
     window.removeEventListener('keydown', onKey);
+    cancelTravel();
     client.disconnect();
   });
 </script>
@@ -157,6 +266,9 @@
       hazards={client.hazards}
       vaultOpen={me ? client.openVaults.includes(me.level) : false}
       guardians={client.guardians}
+      travelPath={travelTrail}
+      onPickCell={(col, row, confirm) => (confirm ? beginTravelTo(col, row) : previewTravelTo(col, row))}
+      onExplored={(depth, ex) => ((explored = ex), (exploredDepth = depth))}
       youId={client.youId}
       tick={client.tick}
       bossDefeated={client.bossDefeated}
