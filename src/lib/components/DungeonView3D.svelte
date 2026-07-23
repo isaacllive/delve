@@ -38,7 +38,10 @@
     youId,
     tick,
     bossDefeated = false,
+    travelPath = [],
     onYaw,
+    onPickCell,
+    onExplored,
     // ── DEBUG toggles ───────────────────────────────────────────────────────
     // Exposed as props so the in-game debug menu can flip them live. Defaults
     // preserve the current dev view: all terrain shown (no fog), ceiling on.
@@ -68,9 +71,19 @@
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
+    /** Remaining steps of an in-progress auto-travel route, drawn as a trail on
+     *  the floor (last step = destination). Empty when not travelling. */
+    travelPath?: { col: number; row: number }[];
     /** Reports the camera's azimuth (radians) whenever it changes, so the HUD
      *  compass can orient relative to the current view. */
     onYaw?: (yaw: number) => void;
+    /** A click on the floor resolves to a grid cell. `confirm` is true on a
+     *  double-click (same cell, quick) — a single click previews the route, a
+     *  double-click commits to walking it. */
+    onPickCell?: (col: number, row: number, confirm: boolean) => void;
+    /** The current floor's fog-memory (explored) set, pushed each fog update so
+     *  auto-explore can find the nearest un-seen cell. Same array ref each tick. */
+    onExplored?: (depth: number, explored: boolean[]) => void;
     debugShowAllTerrain?: boolean;
     debugHideCeiling?: boolean;
     debugAmbient?: number;
@@ -184,6 +197,14 @@
   const OCC_R_IN = 0.42;
   const OCC_R_OUT = 0.66;
   const OCC_SCAN = 24; // cells around the player to consider
+  // Ground/wall oculus: wall blocks in a screen-disc around the delver fade so
+  // you see the SPACE around the character, not just a slit to them. Sized to
+  // roughly the old roof oculus. A large fully-cleared inner disc (R_IN) with a
+  // thin easing edge keeps a big opening clean instead of a broad dither.
+  const GROUND_OCC_SCAN = 18; // cells scanned around the delver
+  const GROUND_OCC_RISE = 10; // clear wall blocks up to this height above the floor
+  const GROUND_R_IN = 0.5; // NDC radius fully cleared around the delver
+  const GROUND_R_OUT = 0.66; // NDC radius the wall fade eases back to solid
 
   // Behind-the-character follow camera. After a move, the camera azimuth eases
   // to sit behind the player (facing their heading); when idle the user can
@@ -389,6 +410,8 @@
     controls.minDistance = 3;
     controls.maxDistance = 24;
 
+    setupPicking(renderer.domElement);
+
     // A dim ambient so revealed-but-dark memory isn't pure black; torches do
     // the real lighting on avatars/props.
     scene.add(new THREE.AmbientLight(0x223, 0.6));
@@ -400,6 +423,45 @@
     window.addEventListener('resize', resize);
     animate();
     ready = true; // signal the build/update effect to run now that THREE exists
+  }
+
+  // Click-to-travel: a click (not a drag) on the floor resolves to a grid cell.
+  let _pickDown: { x: number; y: number } | null = null;
+  let _lastPick: { t: number; x: number; y: number } | null = null;
+  const DOUBLE_CLICK_MS = 500; // max gap for a click pair to count as a confirm
+  function setupPicking(dom: HTMLElement) {
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const plane = new THREE.Plane();
+    const hit = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const coplanar = new THREE.Vector3();
+    dom.addEventListener('pointerdown', (e) => {
+      _pickDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+    });
+    dom.addEventListener('pointerup', (e) => {
+      const down = _pickDown;
+      _pickDown = null;
+      if (e.button !== 0 || !down || !camera || !onPickCell) return;
+      // A meaningful drag is an orbit gesture, not a travel click.
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+      const rect = dom.getBoundingClientRect();
+      ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      // Intersect a horizontal plane at the delver's floor height, then snap.
+      plane.setFromNormalAndCoplanarPoint(up, coplanar.set(0, meCell.elev, 0));
+      if (!ray.ray.intersectPlane(plane, hit)) return;
+      const col = Math.round(hit.x), row = Math.round(hit.z);
+      // Two quick clicks at nearly the same screen spot = a confirm (double
+      // click): the first previews the route, the double-click commits. Keyed on
+      // screen position (not grid cell) so the easing follow-camera — which can
+      // shift which cell a fixed pixel hits between clicks — doesn't break it.
+      const now = performance.now();
+      const confirm =
+        !!_lastPick && now - _lastPick.t < DOUBLE_CLICK_MS && Math.hypot(e.clientX - _lastPick.x, e.clientY - _lastPick.y) < 24;
+      _lastPick = { t: now, x: e.clientX, y: e.clientY };
+      onPickCell(col, row, confirm);
+    });
   }
 
   function resize() {
@@ -717,6 +779,8 @@
     }
 
     refreshAvatars(viewers);
+    // Hand the up-to-date explored set to the parent (auto-explore reads it).
+    onExplored?.(l.depth, revealed);
   }
 
   // ── fade helpers ──────────────────────────────────────────────────────────
@@ -1074,6 +1138,26 @@
       avatarGroup.add(ring);
     }
 
+    // Auto-travel trail: a line of dots along the planned route, with a ring on
+    // the destination, so a click-to-move shows exactly where you're headed.
+    for (let i = 0; i < travelPath.length; i++) {
+      const p = travelPath[i];
+      const isDest = i === travelPath.length - 1;
+      const mk = new THREE.Mesh(
+        isDest ? new THREE.TorusGeometry(0.3, 0.055, 8, 20) : new THREE.CircleGeometry(0.11, 12),
+        new THREE.MeshBasicMaterial({
+          color: 0x7fe0ff,
+          depthTest: false,
+          transparent: true,
+          opacity: isDest ? 0.95 : 0.45,
+        }),
+      );
+      mk.rotation.x = -Math.PI / 2;
+      mk.position.set(p.col, 0.07, p.row);
+      mk.renderOrder = 12;
+      avatarGroup.add(mk);
+    }
+
     // Loot: gold piles (tapered coin mounds) and potions (standing vials). Gold
     // used to be a flat 0.08-thick disc lying on the floor, which foreshortened
     // to an invisible sliver at the game's low camera angle — a mound stands
@@ -1421,13 +1505,21 @@
   const occTargetCeil = new Map<number, number>();
   /** Screen-space fade weight for a world point: 1 inside the clear circle,
    *  ramping to 0 at the ring's outer edge, 0 beyond. */
-  function circleWeight(x: number, y: number, z: number, ccx: number, ccy: number): number {
+  function circleWeight(
+    x: number,
+    y: number,
+    z: number,
+    ccx: number,
+    ccy: number,
+    rIn = OCC_R_IN,
+    rOut = OCC_R_OUT,
+  ): number {
     _v3.set(x, y, z).project(camera!);
     if (_v3.z > 1) return 0; // behind the camera
     const nd = Math.hypot(_v3.x - ccx, _v3.y - ccy);
-    if (nd <= OCC_R_IN) return 1;
-    if (nd >= OCC_R_OUT) return 0;
-    return (OCC_R_OUT - nd) / (OCC_R_OUT - OCC_R_IN);
+    if (nd <= rIn) return 1;
+    if (nd >= rOut) return 0;
+    return (rOut - nd) / (rOut - rIn);
   }
   /** Index of the ground block in `cellIdx` whose vertical span contains world-Y
    *  `y` (blocks run bottom→top). Clamps to the topmost block above the column. */
@@ -1495,27 +1587,46 @@
       }
     }
 
-    // ── Roof (ceiling) oculus: open a soft disc of overhead rock around the
-    // delver's on-screen position so the top-down camera can always see down
-    // onto them. This is intentionally a circle (not a strict sightline test):
-    // the roof otherwise walls the camera off from the whole pocket.
+    // Delver's on-screen position (+ distance), the centre of the clear disc.
     _v3.set(meCell.col, meCell.elev + 0.7, meCell.row);
     const charDist = _v3.distanceTo(camPos);
     _v3.project(camera);
     const ccx = _v3.x, ccy = _v3.y;
-    const c0 = Math.max(0, meCell.col - OCC_SCAN);
-    const c1 = Math.min(l.cols - 1, meCell.col + OCC_SCAN);
-    const r0 = Math.max(0, meCell.row - OCC_SCAN);
-    const r1 = Math.min(l.rows - 1, meCell.row + OCC_SCAN);
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        if (l.cells[cellIndex(c, r, l.cols)].kind === 'wall') continue;
+
+    // ── Oculus: fade both the WALL blocks and the ROOF rock that fall inside a
+    // screen-disc around the delver, so the whole pocket of space AROUND the
+    // character opens up — walls and ceiling together, not merely a tunnel to
+    // them. Only cells in front of the delver (closer to the camera, so no void
+    // is revealed) are cleared; the wall's block-level granularity carves a
+    // rounded hollow while the roof opens one block per cell.
+    const gc0 = Math.max(0, meCell.col - GROUND_OCC_SCAN);
+    const gc1 = Math.min(l.cols - 1, meCell.col + GROUND_OCC_SCAN);
+    const gr0 = Math.max(0, meCell.row - GROUND_OCC_SCAN);
+    const gr1 = Math.min(l.rows - 1, meCell.row + GROUND_OCC_SCAN);
+    const yTop = meCell.elev + GROUND_OCC_RISE;
+    for (let r = gr0; r <= gr1; r++) {
+      for (let c = gc0; c <= gc1; c++) {
         const idx = cellIndex(c, r, l.cols);
-        const roofY = l.cells[idx].ceiling ?? CEIL_FALLBACK;
-        // Roof only opens where it's between the camera and the character.
-        if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
-        const w = circleWeight(c, roofY, r, ccx, ccy);
-        if (w > 0) bump(occTargetCeil, idx, w);
+        if (l.cells[idx].kind === 'wall') {
+          if (c === meCell.col && r === meCell.row) continue;
+          const s = cellBlockStart[idx];
+          const n = cellBlockCount[idx];
+          for (let k = 0; k < n; k++) {
+            const b = s + k;
+            const by = blockY[b];
+            if (by > yTop) break; // blocks are bottom→top; nothing above matters
+            if (_v3.set(c, by, r).distanceTo(camPos) >= charDist + 0.5) continue;
+            const w = circleWeight(c, by, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
+            if (w > 0) bump(occTarget, b, w);
+          }
+        } else {
+          // Roof oculus: open the overhead rock in the same disc so it never
+          // walls the camera off from the pocket the floor/walls just opened.
+          const roofY = l.cells[idx].ceiling ?? CEIL_FALLBACK;
+          if (_v3.set(c, roofY, r).distanceTo(camPos) >= charDist + 0.5) continue;
+          const w = circleWeight(c, roofY, r, ccx, ccy, GROUND_R_IN, GROUND_R_OUT);
+          if (w > 0) bump(occTargetCeil, idx, w);
+        }
       }
     }
     // Ease flagged blocks toward faded, previously-flagged back toward solid.
@@ -1532,6 +1643,7 @@
       if (o <= 0.001 && tgt === 0) occActive.delete(b);
       else occActive.add(b);
     }
+    // Ease flagged roof cells open, previously-flagged ones back to solid.
     let cChanged = false;
     for (const i of new Set([...occActiveCeil, ...occTargetCeil.keys()])) {
       const tgt = occTargetCeil.get(i) ?? 0;
@@ -1594,6 +1706,7 @@
     // which flips after the async THREE init completes).
     void tick;
     void ready;
+    void travelPath; // re-render the trail the instant a route is set/updated
     const l = level;
     const ps = players;
     if (!ready || !THREE || !scene) return;
