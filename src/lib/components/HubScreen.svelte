@@ -5,7 +5,6 @@
   // actions are server-authoritative intents (client.descend / client.buy);
   // this screen never mutates game state directly.
   import type { GameClient } from '$lib/net.svelte.ts';
-  import { getClass } from '$lib/game/classes.ts';
   import { CAMP_DEPTH } from '$lib/game/dungeon.ts';
   import { POTION_COST } from '$lib/game/loot.ts';
 
@@ -19,8 +18,9 @@
 
   let chatText = $state('');
   const me = $derived(client.me);
-  const myClass = $derived(getClass(me?.classId));
   const canAfford = $derived((me?.gold ?? 0) >= POTION_COST);
+  const hpPct = $derived(me ? Math.max(0, Math.min(1, me.hp / Math.max(1, me.hpMax))) : 0);
+  const carried = $derived(me?.inventory.reduce((n, s) => n + s.count, 0) ?? 0);
 
   function submitChat(e: Event) {
     e.preventDefault();
@@ -51,7 +51,6 @@
             <li class:me={p.id === client.youId}>
               <i class="dot" style="background:{p.color}"></i>
               <span class="pname">{p.name}</span>
-              <span class="pclass">{getClass(p.classId).name}</span>
               <span class="pstatus" class:delving={p.level > CAMP_DEPTH}>{statusOf(p.level)}</span>
             </li>
           {/each}
@@ -61,22 +60,20 @@
       <!-- Your delver + shop -------------------------------------------------->
       <section class="you">
         {#if me}
-          <div class="sheet" style="--accent:{myClass.accent}">
+          <div class="sheet">
             <div class="sheet-head">
-              <b>{myClass.name}</b>
-              <span class="role">{myClass.role}</span>
+              <b>{me.name}</b>
+              <span class="role">Adventurer</span>
             </div>
-            <p class="blurb">{myClass.blurb}</p>
-            <div class="stats">
-              <span class="stat hp">♥ {me.hp}/{me.hpMax}</span>
-              <span class="stat" title="Strength">💪 {me.strength}</span>
-              <span class="stat">🪙 {me.gold}g</span>
-              <span class="stat" title="Items carried">🎒 {me.inventory.reduce((n, s) => n + s.count, 0)}</span>
+            <p class="blurb">A lone delver. Your power is what you find and how you wield it.</p>
+            <div class="hpbar" title="Health">
+              <div class="fill" style="width:{hpPct * 100}%"></div>
+              <span class="hptext">♥ {me.hp} / {me.hpMax}</span>
             </div>
-            <div class="abilities">
-              {#each myClass.abilities as ab (ab.name)}
-                <span class="chip" title={ab.desc}>{ab.name}</span>
-              {/each}
+            <div class="chips">
+              <span class="chip" title="Strength — raised only by a Potion of Strength">💪 {me.strength}</span>
+              <span class="chip gold" title="Gold">🪙 {me.gold}</span>
+              <span class="chip" title="Items carried">🎒 {carried}</span>
             </div>
           </div>
 
@@ -201,10 +198,6 @@
     border-radius: 50%;
     flex: none;
   }
-  .pclass {
-    color: #8a8f99;
-    font-size: 12px;
-  }
   .pstatus {
     margin-left: auto;
     font-size: 11px;
@@ -214,7 +207,7 @@
     color: #ff8a5a;
   }
   .sheet {
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid #ffcf5a;
     padding: 4px 0 4px 10px;
     margin-bottom: 14px;
   }
@@ -224,41 +217,61 @@
     gap: 8px;
   }
   .sheet-head b {
-    color: var(--accent);
+    color: #fff;
     font-size: 16px;
   }
   .sheet-head .role {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #6b7079;
+    color: #ffcf5a;
   }
   .blurb {
-    margin: 4px 0 8px;
+    margin: 4px 0 10px;
     color: #b7bcc6;
     font-size: 12px;
     line-height: 1.45;
   }
-  .stats {
-    display: flex;
-    gap: 12px;
-    font-size: 13px;
+  /* HP bar + vitals chips mirror the in-game HUD so camp and dungeon read as one UI. */
+  .hpbar {
+    position: relative;
+    height: 20px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    margin-bottom: 8px;
   }
-  .stat.hp {
-    color: #ff8a8a;
+  .hpbar .fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: linear-gradient(180deg, #ff6a6a, #c0392b);
+    transition: width 0.25s ease;
   }
-  .abilities {
+  .hpbar .hptext {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    text-shadow: 0 1px 2px #000;
+  }
+  .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 5px;
-    margin-top: 8px;
   }
   .chip {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 6px;
     padding: 2px 7px;
-    font-size: 10px;
+    font-size: 12px;
     color: #cfd3db;
+    white-space: nowrap;
+  }
+  .chip.gold {
+    color: #ffcf5a;
   }
   .buy {
     width: 100%;
