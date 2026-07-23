@@ -37,6 +37,8 @@ export class GameClient {
   hasAmulet = $state(false);
   /** Depths whose guardian-vault gate has been opened. */
   openVaults = $state<number[]>([]);
+  /** Live guardian-statue positions on the local delver's floor. */
+  guardians = $state<{ col: number; row: number }[]>([]);
   /** Set to the winner's name when someone completes the run. */
   won = $state<string | null>(null);
 
@@ -105,6 +107,7 @@ export class GameClient {
         this.bossDefeated = msg.bossDefeated;
         this.hasAmulet = msg.hasAmulet;
         this.openVaults = msg.openVaults;
+        this.guardians = msg.guardians;
         break;
       case 'chat':
         this.pushChat({ name: msg.name, text: msg.text, at: msg.at });

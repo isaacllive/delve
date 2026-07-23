@@ -62,6 +62,7 @@ import {
   stepHazards,
   type HazardField,
 } from '../game/hazards.ts';
+import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -151,6 +152,9 @@ interface Run {
   usedAltars: Set<number>;
   /** Depths whose guardian-vault gate has been opened (lever pulled). */
   openVaults: Set<number>;
+  /** Live guardian-statue positions per floor (from the vault; they mirror the
+   *  delver's moves). Created on first visit. */
+  guardians: Map<number, GuardianPos[]>;
 }
 
 // Run state lives in globalThis so an in-flight game survives HMR. We do NOT
@@ -200,6 +204,27 @@ function ensureMonsters(run: Run, floor: number): void {
   run.loot.set(floor, spawnLoot(run.seed, level));
   run.traps.set(floor, spawnTraps(run.seed, level));
   run.gear.set(floor, spawnGear(run.seed, level));
+  run.guardians.set(floor, (level.vault?.guardians ?? []).map((g) => ({ ...g })));
+}
+
+function guardiansOn(run: Run, floor: number): GuardianPos[] {
+  return run.guardians.get(floor) ?? [];
+}
+function guardianAt(run: Run, floor: number, col: number, row: number): boolean {
+  return guardiansOn(run, floor).some((g) => g.col === col && g.row === row);
+}
+
+/** Advance a floor's guardian statues by the delver's step (mirror movement).
+ *  Confined to the vault: the gate cell is treated as impassable to them, so an
+ *  opened gate never lets a statue escape into the dungeon. */
+function mirrorFloorGuardians(run: Run, floor: number, dcol: number, drow: number): void {
+  const guardians = run.guardians.get(floor);
+  if (!guardians || guardians.length === 0) return;
+  const level = getLevel(run.dungeon, floor);
+  const gate = level.vault?.gate;
+  const occupied = (c: number, r: number): boolean =>
+    (gate?.col === c && gate?.row === r) || playerAt(run, floor, c, r) || !!monsterAt(run, floor, c, r);
+  run.guardians.set(floor, mirrorGuardians(guardians, dcol, drow, level, occupied));
 }
 
 function toMonsterState(m: Monster, floor: number, hidden: boolean): MonsterState {
@@ -257,6 +282,7 @@ function stateMsg(run: Run, youId: string): ServerMsg {
     bossDefeated: run.bossDefeated,
     hasAmulet: run.hasAmulet,
     openVaults: [...run.openVaults],
+    guardians: guardiansOn(run, floor).map((g) => ({ col: g.col, row: g.row })),
   };
 }
 
@@ -321,6 +347,7 @@ function joinRun(
       summonCd: new Map(),
       usedAltars: new Set(),
       openVaults: new Set(),
+      guardians: new Map(),
     };
     runs.set(code, run);
   }
@@ -590,8 +617,8 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
     endPlayerTurn(run, player);
     return;
   }
-  if (blocksMove(level, nc, nr)) {
-    // Bumping a wall spends no turn (Brogue-faithful) — just re-face.
+  if (blocksMove(level, nc, nr) || guardianAt(run, st.level, nc, nr)) {
+    // Bumping a wall or a guardian statue spends no turn — just re-face.
     broadcastState(run);
     return;
   }
@@ -599,6 +626,11 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   st.col = nc;
   st.row = nr;
   st.elevation = elevationOn(level, nc, nr);
+
+  // Guardian statues mirror the step you just took (Brogue guardian rooms). They
+  // stay confined to their vault (the gate cell is treated as impassable to them)
+  // and never share a cell with a delver or monster.
+  mirrorFloorGuardians(run, st.level, dx, dy);
 
   // Hidden traps spring on entry. They sit on floor cells, so they never
   // coincide with a natural pit/water hazard — resolve them first.

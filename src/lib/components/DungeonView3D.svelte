@@ -34,6 +34,7 @@
     traps = [],
     hazards = [],
     vaultOpen = false,
+    guardians = [],
     youId,
     tick,
     bossDefeated = false,
@@ -62,6 +63,8 @@
     hazards?: HazardCell[];
     /** Whether this floor's guardian-vault gate has been opened. */
     vaultOpen?: boolean;
+    /** Live guardian-statue positions on this floor. */
+    guardians?: { col: number; row: number }[];
     youId: string | null;
     tick: number;
     bossDefeated?: boolean;
@@ -1166,6 +1169,17 @@
       lever.rotation.z = vaultOpen ? 0.7 : -0.7; // thrown vs set
       lever.renderOrder = 13;
       avatarGroup.add(lever);
+    }
+
+    // Guardian statues — stone sentinels that mirror your every step.
+    for (const g of guardians) {
+      const statue = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 1.3, 0.5),
+        new THREE.MeshBasicMaterial({ color: 0x8a8f9a, depthTest: false }),
+      );
+      statue.position.set(g.col, 0.65, g.row);
+      statue.renderOrder = 14;
+      avatarGroup.add(statue);
     }
 
     // Commutation altar — a low glowing pedestal you can activate.

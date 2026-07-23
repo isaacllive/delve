@@ -46,8 +46,14 @@ export interface DungeonLevel extends Level {
   altar?: { col: number; row: number };
   /** A guardian vault (some room-biome floors): a reward sealed behind a
    *  portcullis `gate`, opened by pulling the `lever`. `reward` marks the
-   *  guaranteed loot inside. */
-  vault?: { gate: { col: number; row: number }; lever: { col: number; row: number }; reward: { col: number; row: number } };
+   *  guaranteed loot inside; `guardians` are mirror-movement statues (initial
+   *  positions) that copy the delver's every step (see guardians.ts). */
+  vault?: {
+    gate: { col: number; row: number };
+    lever: { col: number; row: number };
+    reward: { col: number; row: number };
+    guardians: { col: number; row: number }[];
+  };
   /** Boss location (bottom floor only). */
   boss?: { col: number; row: number };
   /** Exit-portal location (bottom floor only; same cell as the boss). */
@@ -390,10 +396,18 @@ function generateCaveLevel(seed: string, depth: number, opts: ResolvedOptions): 
         reserved.add(gateIdx);
         reserved.add(leverIdx);
         reserved.add(rewardIdx);
+        // One guardian statue inside, on a floor cell that isn't the reward or
+        // door — a mirror-movement obstacle between you and the loot.
+        const guardIdx = vroom.cells.find(
+          (i) => i !== gateIdx && i !== rewardIdx && cells[i]?.kind === 'floor',
+        );
+        const guardians = guardIdx !== undefined ? [{ col: guardIdx % cols, row: Math.floor(guardIdx / cols) }] : [];
+        if (guardIdx !== undefined) reserved.add(guardIdx);
         vault = {
           gate: { col: door.col, row: door.row },
           lever: { col: leverCol, row: leverRow },
           reward: { col: rewardIdx % cols, row: Math.floor(rewardIdx / cols) },
+          guardians,
         };
       }
     }

@@ -178,6 +178,8 @@ export type ServerMsg =
       hasAmulet: boolean;
       /** Depths whose guardian-vault gate has been opened (lever pulled). */
       openVaults: number[];
+      /** Live guardian-statue positions on the viewer's floor. */
+      guardians: { col: number; row: number }[];
     }
   | { t: 'chat'; from: string; name: string; text: string; at: number }
   | { t: 'log'; text: string } // system/flavor line ("You fall into the dark…")

@@ -156,6 +156,7 @@
       traps={client.traps}
       hazards={client.hazards}
       vaultOpen={me ? client.openVaults.includes(me.level) : false}
+      guardians={client.guardians}
       youId={client.youId}
       tick={client.tick}
       bossDefeated={client.bossDefeated}
