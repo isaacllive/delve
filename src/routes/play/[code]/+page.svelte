@@ -283,6 +283,7 @@
       {client}
       {cameraYaw}
       {interactPrompt}
+      traveling={travel?.active ?? false}
       biome={currentLevel?.biomeName}
       subBiome={currentLevel?.subBiomeName}
       onChat={(t) => client.sendChat(t)}
