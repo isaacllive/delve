@@ -26,7 +26,8 @@ const FAST_TICKS = HASTE_TICKS;
  *  `sleeping`/`wandering` are unaware (sneak-attackable), `hunting` is alert.
  *  The wire contract owns this type — re-exported here for the catalog + AI. */
 export type { MonsterAwareness } from './protocol.ts';
-import type { MonsterAwareness, ActorStatus } from './protocol.ts';
+import type { MonsterAwareness } from './protocol.ts';
+import type { StatusSet } from './status.ts';
 
 // ── Ability flags ────────────────────────────────────────────────────────────
 // DECLARATIVE ONLY. This module never resolves these — it tags kinds/monsters so
@@ -208,9 +209,9 @@ export interface Monster {
    *  next (0 = ready). Advanced by the server as the player spends turns. */
   ticksUntilTurn: number;
   /** Timed afflictions (slowed, discordant, negated…). Absent until something
-   *  afflicts it; the server decays these once per turn and the rules for what
-   *  each one DOES live in the pure status module (gap G2). */
-  statuses?: ActorStatus[];
+   *  afflicts it; the server decays these once per action and the rules for what
+   *  each one DOES live in the pure status module (`status.ts`). */
+  statuses?: StatusSet;
 }
 
 // ── Awareness (stealth) state machine ────────────────────────────────────────

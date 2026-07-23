@@ -63,7 +63,7 @@ import {
   type HazardField,
 } from '../game/hazards.ts';
 import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
-import { decayStatuses } from '../game/status.ts';
+import { decayStatuses, emptyStatuses } from '../game/status.ts';
 import { dartDamage, spawnTraps, trapAt, type Trap } from '../game/traps.ts';
 import {
   isItemKind,
@@ -375,7 +375,7 @@ function joinRun(
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
     poison: 0,
-    statuses: [],
+    statuses: [...emptyStatuses()],
     nutrition: STOMACH_SIZE,
     gold: 0,
     inventory: [{ kindId: 'ration', count: 1 }], // Brogue starts you with a ration
@@ -455,9 +455,11 @@ function damageMonster(
   return true;
 }
 
-// Afflicting an actor (addStatus) and expiring afflictions (decayStatuses) are
-// pure mechanism and live in `status.ts`; the server only decides WHEN to call
-// them. Resolving what each status does is gap G2.
+// Afflicting an actor (`afflict`), expiring afflictions (`decayStatuses`) and
+// resolving what each one MEANS (`resolveStep`, `effectiveActionTicks`,
+// `absorbDamage`, …) are all pure and live in `status.ts`. The server only
+// decides WHEN to call them — see the integration pass that routes movement,
+// the monster scheduler, combat and the gas clouds through those resolvers.
 
 /** Remove a slain monster and resolve its death abilities (explodesOnDeath). */
 function killMonster(run: Run, floor: number, m: Monster): void {
@@ -1477,11 +1479,13 @@ const WORLD_SYSTEMS: WorldSystem[] = [
   ({ run, player }) => maybeStarve(run, player),
   ({ run, player }) => maybePoison(run, player),
   ({ player }) => maybeRegen(player),
-  // Timed statuses tick down on the delver and on every monster sharing the
-  // floor, so an affliction lapses at the same rate for both sides of a fight.
-  ({ run, player }) => {
-    decayStatuses(player.state);
-    for (const m of monstersOn(run, player.state.level)) decayStatuses(m);
+  // Timed statuses tick down on the delver. Monsters decay their own on the
+  // action they take (see takeMonsterTurns) — a fast monster's affliction must
+  // lapse over ITS actions, not the player's, or haste would also grant it a
+  // longer paralysis.
+  ({ player }) => {
+    const st = player.state;
+    st.statuses = [...decayStatuses(st.statuses).statuses];
   },
 ];
 

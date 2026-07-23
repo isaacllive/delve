@@ -11,6 +11,13 @@
 import type { ItemKindId, ItemCategory } from './items.ts';
 import type { GearInstance, GearCategory } from './gear.ts';
 import type { GasKind } from './hazards.ts';
+import type { StatusEffect } from './status.ts';
+
+// The status vocabulary is owned by `status.ts` (which also holds the rules for
+// what each condition does) and imported here for the wire, the same way this
+// contract imports GasKind / ItemKindId / GearInstance from their domains.
+// Re-exported so client code can name the types without reaching past protocol.
+export type { StatusKind, StatusEffect } from './status.ts';
 
 /** One stack of carried items (a kind + how many). The client renders each by
  *  its per-run appearance (derived from the seed) unless the kind is in the
@@ -18,43 +25,6 @@ import type { GasKind } from './hazards.ts';
 export interface InvStack {
   kindId: ItemKindId;
   count: number;
-}
-
-// ── status effects ───────────────────────────────────────────────────────────
-// The wire contract for timed afflictions and boons. Declared here (like
-// MonsterAwareness below) so client and server share one vocabulary; the RULES
-// — what each status does per turn, how it stacks, how it decays — belong to
-// the pure `status.ts` module (gap G2), which re-exports this type rather than
-// defining a parallel one.
-//
-// The full Brogue set is declared up front deliberately: it costs nothing on the
-// wire (unset statuses are simply absent) and it means adding "confusion
-// actually scrambles your steps" is a change to ONE module instead of a change
-// to the protocol, the server, the HUD, and the renderer at once.
-
-export type StatusKind =
-  | 'poison' // loses HP per turn (the only status resolved today)
-  | 'confused' // movement veers randomly
-  | 'hallucinating' // monsters/items are drawn as the wrong things
-  | 'levitating' // floats over pits, water, lava and chasms
-  | 'telepathic' // senses every monster on the level, through walls
-  | 'hasted' // acts twice as often (energy.ts HASTE_TICKS)
-  | 'slowed' // acts half as often (energy.ts SLOW_TICKS)
-  | 'darkened' // torch radius crushed
-  | 'paralyzed' // cannot act at all
-  | 'discordant' // attacks its own allies
-  | 'nauseous' // may vomit instead of acting
-  | 'shielded' // absorbs incoming damage
-  | 'negated' // magical abilities suppressed
-  | 'fireImmune'; // ignores fire damage
-
-/** One active status on an actor, with the turns remaining before it lapses. */
-export interface ActorStatus {
-  kind: StatusKind;
-  /** Turns left. Decremented once per turn; the status drops at 0. */
-  turns: number;
-  /** Optional magnitude (shield points, poison stacks) — semantics per kind. */
-  magnitude?: number;
 }
 
 /** A targeted cell for a thrown item or a zapped bolt. The server validates and
@@ -91,7 +61,7 @@ export interface PlayerState {
    *  it into the status layer rather than running two poison clocks at once. */
   poison: number;
   /** Timed afflictions and boons currently on this delver. */
-  statuses: ActorStatus[];
+  statuses: StatusEffect[];
   /** Stomach fullness (nutrition). Drains ~1/turn; 0 = starving (see character.ts). */
   nutrition: number;
   /** Gold carried this expedition (lost on death). */
@@ -134,7 +104,7 @@ export interface MonsterState {
   abilities?: string[];
   /** Timed afflictions on this monster (omitted when it has none, to keep the
    *  per-floor monster broadcast small). */
-  statuses?: ActorStatus[];
+  statuses?: StatusEffect[];
   /** True when this monster is currently concealed (aquatic ambusher lurking in
    *  deep water) — the client skips rendering it until it surfaces to strike. */
   hidden?: boolean;
