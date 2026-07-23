@@ -148,8 +148,24 @@ Tick items *there*, not here — this section is only a pointer.
       new terrain kind is two rows. 439 tests, 0 type errors, combat verified
       live over the wire. Bolt hook deferred to G1 (its shape depends on
       `bolt.ts`); message-log types deferred to G17.
-- **Wave 3 (4 parallel, next)** — G1 bolt engine · G2 status *resolution*
-  (mechanism now exists) · G3 scent map + real monster AI · G13 terrain breadth.
+- [x] **Wave 3 modules (4 parallel agents)** — LANDED, but **not yet wired**:
+      the server still runs the old movement, AI and hazard rules, so play is
+      unchanged. `bolt.ts` (27 tests) · `status.ts` mechanism + resolution (33) ·
+      `scent.ts` + `monsterAi.ts` (26) · terrain breadth: 7 new kinds, 10 new
+      properties, `creep.ts` (57). Zero merge conflicts. **575 tests, 0 errors.**
+  - [x] **Seam pass** — merging G3 and G13 produced three defects neither had
+        alone (eels fenced out of deep water; walkers *and* fliers pathing into
+        lava). All three came from naming terrain kinds instead of asking
+        `TERRAIN_PROPS`. Fixed + pinned with regression tests.
+  - [ ] **Integration pass (serial, next)** — order matters, they share
+        functions: **G3** (`actMonster` → `decideMonsterAction`, scent world
+        system) → **G13** (move-handler effects; **`burntKind` in `hazards.ts`
+        first** — without it a burning bridge becomes floor instead of the chasm
+        it spanned) → **G2** (`resolveStep` makes confusion gas real; paralysis,
+        speed, shields, poison migration). See `docs/parallelization.md`.
+  - [ ] **Blocker for G6 (staffs/wands)**: a tunneling bolt mutates walls, but
+        both sides regenerate geometry from `seed#depth` — bored rock desyncs
+        the client. Needs a terrain-delta wire message; ship other bolts first.
 - **Then** — breadth (G4/G6/G9/G15/G18), texture (G7/G8/G10/G14/G17/G19/G20),
   authored (G16/G12/G5), metering (G11) last.
 - **Two audit findings owed regression tests**: confusion gas is simulated but

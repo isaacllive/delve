@@ -82,20 +82,63 @@ live over the wire.
 
 ---
 
-## Wave 3 — foundations (4 parallel agents, `isolation: "worktree"`)
+## Wave 3 — foundations ☑ MODULES LANDED, ⚠️ NOT YET WIRED
 
-Fully disjoint: three brand-new files plus one owned module. **Start these
-together.**
+Four parallel worktree agents. All four modules are merged, tested and green —
+**575 tests, 0 type errors** — but *none of them changes how the game plays
+yet*. The server still runs the old movement, the old AI and the old hazard
+rules. That wiring is the integration pass below.
 
-| ID | Workstream | Owns | Integrates through | Status |
-|---|---|---|---|---|
-| **G1** | Bolt engine | new `bolt.ts` (+test) | `gameServer` bolt hook | ☐ |
-| **G2** | Status-effect layer — **mechanism landed in Phase 0.2**; this is now RESOLVING each kind (confusion scrambles steps, levitation clears pits, haste/slow feed the scheduler…) and folding `poison` in | `status.ts`, the systems that own each behaviour | `gameServer`, `Hud` (display → defer to G17) | ◐ |
-| **G3** | Scent map + real monster AI | new `scent.ts` (+test) | `gameServer` (`actMonster` rewrite — **serial, it's the one server edit in this wave**) | ☐ |
-| **G13** | Terrain breadth + layer model | `terrain.ts`, `voxelize.ts` (+tests) | `protocol` (cells), renderer registry, `gameServer` (deep-water pack drop) | ☐ |
+| ID | Workstream | Landed | Tests |
+|---|---|---|---|
+| **G1** | Bolt engine | `bolt.ts` | 27 |
+| **G2** | Status effects (mechanism + resolution) | `status.ts` | 33 |
+| **G3** | Scent map + real monster AI | `scent.ts`, `monsterAi.ts` | 26 |
+| **G13** | Terrain breadth (7 new kinds, 10 new properties) | `terrain.ts`, `voxelize.ts`, `creep.ts` | 57 |
 
-⚠️ **G3 and G13 both eventually touch `gameServer.ts`.** Keep both agents in
-pure-module scope; land the two server edits serially afterward, G3 first.
+### What the wave taught us
+
+- **Worktrees fork from HEAD at creation, and that raced a commit.** All four
+  agents started one commit *behind* the Phase 0.2 contracts pass, so they
+  built against a repo with no `TERRAIN_PROPS`, no `status.ts` and no
+  actor-effect seam. G2 rebuilt `status.ts` from scratch as a result. **Commit
+  and verify `git log` in the worktree before briefing agents on "the module
+  that already exists".** Two agents were mid-flight when this was caught and
+  were told to rebase; both did so cleanly.
+- **Merging two agents creates defects neither one has.** G3's AI reasoned
+  about terrain kinds *by name*; G13 then split `water` into shallow/deep and
+  added `lava`. Result: eels fenced out of deep water, and monsters — including
+  fliers — walking into lava. Fixed in `648020d`, and the fix was to ask
+  `TERRAIN_PROPS` instead of naming kinds. **Budget for a seam pass after any
+  parallel wave; it is not optional.**
+- **A pure-module brief works.** Zero merge conflicts across four agents. The
+  one file two agents both had a claim on (`gameServer.ts`) was off-limits to
+  all of them, and that is exactly why.
+
+### ⚠️ Integration pass (SERIAL — the next task)
+
+Each agent returned a precise integration note. Apply in this order, because
+they touch the same functions:
+
+1. **G3** — `actMonster` rewrite to call `decideMonsterAction`; scent field on
+   `Run` + a world-system that advances it *before* monster turns. Watch: the
+   summon-cooldown decrement moves out of `actMonster`.
+2. **G13** — move handler: bog/deep-water action cost (**do the scheduler one
+   first**, the rest are independent branches), lava contact damage per turn,
+   lichen poison, deep-water pack drop, web entangle. Plus `hazards.ts`
+   `burntKind` — **without it a burning bridge becomes floor instead of the
+   chasm it spanned**, silently deleting the hazard.
+3. **G2** — `resolveStep` in the move handler (this is the one line that makes
+   confusion gas real), `canAct` for paralysis, `effectiveActionTicks` on both
+   the player and the monster scheduler, `absorbDamage` in combat, the
+   `confusion` gas branch beside the existing `caustic` one, and the poison
+   migration off the legacy `PlayerState.poison` counter.
+4. **G1** — nothing to wire until staffs/wands (G6) exist.
+
+**Known blocker for G6, found by G1:** a tunneling bolt mutates walls, but
+client and server both regenerate geometry from `seed#depth`. Bored rock makes
+the client's map silently diverge. Tunneling needs an explicit terrain-delta
+wire message before it can ship — ship the other bolt kinds first.
 
 ## Wave 4 — breadth (5 parallel, after their foundations)
 
