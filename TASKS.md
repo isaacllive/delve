@@ -157,12 +157,19 @@ Tick items *there*, not here — this section is only a pointer.
         alone (eels fenced out of deep water; walkers *and* fliers pathing into
         lava). All three came from naming terrain kinds instead of asking
         `TERRAIN_PROPS`. Fixed + pinned with regression tests.
-  - [ ] **Integration pass (serial, next)** — order matters, they share
-        functions: **G3** (`actMonster` → `decideMonsterAction`, scent world
-        system) → **G13** (move-handler effects; **`burntKind` in `hazards.ts`
-        first** — without it a burning bridge becomes floor instead of the chasm
-        it spanned) → **G2** (`resolveStep` makes confusion gas real; paralysis,
-        speed, shields, poison migration). See `docs/parallelization.md`.
+  - [x] **Integration pass** — LANDED, in dependency order. **G3**: monsters
+        path + track scent (verified live — a monster closed 4→1 unaided and
+        killed a resting delver; the old rule stalled on walls). **G13**: fire
+        leaves what fuel `burnsInto` (a burnt bridge leaves its chasm, not safe
+        floor), lava ignites neighbours, terrain sets step cost, deep water
+        sweeps the pack, webs entangle, levitation floats over it all; contact
+        damage resolves per-turn only, so entering lava can't be charged twice.
+        **G2**: paralysis, entanglement, confused steps, haste/slow in one place,
+        shields, fire immunity, and poison migrated onto the status clock.
+  - [ ] **Confusion gas has no in-game source.** The pathway is now live and
+        tested, but `applyPotionImpact` only emits caustic and fire and there is
+        no Potion of Confusion in the catalog — so it stays unreachable in play
+        until **G9** adds one. The audit bug is fixed; the content is missing.
   - [ ] **Blocker for G6 (staffs/wands)**: a tunneling bolt mutates walls, but
         both sides regenerate geometry from `seed#depth` — bored rock desyncs
         the client. Needs a terrain-delta wire message; ship other bolts first.

@@ -48,10 +48,10 @@ but it is no longer the constraint that shapes design choices — solo Brogue is
 | 2 | **Identification game** | ✅ per-run seeded appearances, shared `discovered` set, use-ID + Scroll of Identify | 🟡 65% | G10 (polarity, curses) |
 | 3 | **Hand-tuned item kit** | 🟡 5 potions, 4 scrolls, 1 food, 6 weapons, 6 armors. **No staffs, wands, rings, charms, runics** | 🟡 35% | G6, G7, G8, G9, G10, G11 |
 | 4 | **Enchant economy** | ✅ per-instance enchant, +1 enchant / −1 STR req, metered scrolls, commutation altars | 🟢 80% | G10 (negative enchant/curses) |
-| 5 | **Emergent terrain sim** | 🟡 fire + 2 gases as a CA — but **confusion gas has no effect**, lava is palette-only, no steam/item-burning/bog/webs | 🟡 40% | G13, G15 |
-| 6 | **Information as gameplay** | 🟡 stealth states, persistent fog, traps. **No scent, telepathy, magic-map, clairvoyance, detect-magic** | 🟡 30% | G3, G9, G17, G18 |
+| 5 | **Emergent terrain sim** | ✅ fire spreads and leaves what fuel `burnsInto`; real lava that burns and ignites; deep water sweeps your pack; bog, webs, lichen, bridges, secret doors. Gas still needs steam + item-burning, and **no source emits confusion gas yet** | 🟢 70% | G15, G9 |
+| 6 | **Information as gameplay** | 🟡 stealth states, persistent fog, traps, **scent-tracking pursuit**. No telepathy, magic-map, clairvoyance, detect-magic | 🟡 45% | G9, G17, G18 |
 | 7 | **Machines** | 🟡 one vault archetype (portcullis + lever + mirror guardians) + commutation altars. No blueprint framework, no captives, no flavor machines | 🟡 30% | G12, G14 |
-| 8 | **Monster geometry** | 🟡 ~24 kinds, 11 ability flags all resolved, hordes, OOD, 4 mutations. **AI is greedy sign-stepping** (no pathfinding), no monster spells, no allies | 🟡 45% | G3, G4, G5, G18 |
+| 8 | **Monster geometry** | 🟡 ~24 kinds, 11 ability flags, hordes, OOD, mutations. **AI now paths and tracks scent**; still no monster spells or allies | 🟡 60% | G4, G5, G18 |
 | 9 | **Amulet + ascension** | ✅ depth 26, amulet wakes the dungeon, climb-out win | 🟢 85% | G20 |
 | 10 | **Presentation / feedback** | 🟡 HUD, minimap, 3D voxel view. No monster sidebar, no message history, no level feeling, no inspect | 🟡 35% | G16, G17 |
 
@@ -64,18 +64,27 @@ parallelizable work in the project — see §4.
 
 ---
 
-## 2. Two latent bugs found during this audit
+## 2. Latent bugs found by audit — all fixed
 
-Not new features — existing systems that don't do what their code claims:
+Existing systems that didn't do what their code claimed. Kept here as the record
+of what to watch for, since each one had passed unnoticed for a long time.
 
-- **Confusion gas is inert.** `hazards.ts` simulates a `confusion` gas field and
-  the renderer draws it, but `hazardHitPlayer` / `stepFloorHazards` in
-  `gameServer.ts` only read `caustic`. Nothing is ever confused. Fixed by G2
-  (there is no status layer to apply it to). *Regression test owed.*
-- **Monsters don't path.** `pathfind.ts` exists, is tested, and is used **only**
-  by the client (travel-to / auto-explore). `actMonster` chases with
-  `Math.sign` deltas and three fallback steps, so monsters stick on concave
-  walls and lose the player around any corner. Fixed by G3.
+- ☑ **Confusion gas was inert.** `hazards.ts` simulated a `confusion` field and
+  the renderer drew it, but the server only ever read `caustic`. Fixed in the G2
+  integration — delvers *and* monsters are now confused by it. **Still not
+  reachable in play**: nothing emits confusion gas (`applyPotionImpact` produces
+  caustic and fire only), so it waits on a Potion of Confusion in **G9**.
+- ☑ **Monsters didn't path.** `pathfind.ts` was tested but used only by the
+  client; `actMonster` chased with `Math.sign` deltas, so monsters stuck on
+  concave walls. Fixed in the G3 integration, with a regression test that
+  re-implements the old rule as its yardstick.
+- ☑ **Burning fuel always became floor.** Once bridges existed, that silently
+  deleted the chasm a burnt bridge spanned, leaving safe ground. Found while
+  integrating G13; fire now leaves whatever the kind `burnsInto`.
+- ☑ **The AI named terrain kinds instead of asking for properties.** Merging G3
+  and G13 fenced eels out of deep water and sent monsters — including fliers —
+  walking into lava. The lesson generalises: **derive from `TERRAIN_PROPS`,
+  never match on kind names.**
 
 ---
 
@@ -90,9 +99,9 @@ tracker in `parallelization.md` references these IDs only.
 | ID | Gap | Effort | Depends on |
 |---|---|---|---|
 | ☑ **G1** | **Bolt engine** — new pure `bolt.ts`: trace a bolt from caster to target along `los.ts`, resolve stop/pass-through/reflect/bounce/tunnel per bolt kind, return the affected path. Brogue's staffs, wands and every monster spell are bolts; without this they can't exist. | M | — |
-| ◐ **G2** | *(module landed; server wiring pending — the confusion-gas fix is in that pass)* **Status-effect layer** — new pure `status.ts`: a duration/stacking/decay model plus the Brogue status set (confusion, hallucination, levitation, telepathy, haste, slow, darkness, paralysis, discord, nausea, shielding, negation, fire immunity). Player carries only `poison` today. Wire one per-turn decay world-system + protocol field; **fixes the inert confusion gas**. | M | — |
-| ◐ **G3** | *(modules landed; `actMonster` still runs the old rule until the integration pass)* **Scent map + real monster AI** — new pure `scent.ts` (decaying diffusion field the player emits, Brogue's actual pursuit substrate) and switch `actMonster` from sign-stepping to `pathfind.ts` + scent-following, with the Brogue chance-to-lose-the-track. | M | — |
-| ◐ **G13** | *(kinds + rules landed; move-handler effects pending. Layering deliberately deferred — see the `terrain.ts` header for the decision and its cost. Statues + luminescent fungus still open; placement is G14)* **Terrain breadth + layer model** — Brogue cells stack layers (dungeon / liquid / surface / gas); Delve has one `TerrainKind` per cell. Add the layer model, then: deep vs shallow water (deep drops pack items, allows swimming), **real lava**, chasm-as-fast-descent, bog, spider webs, creeping lichen, bridges, statues, luminescent fungus, **secret doors**. | L | — |
+| ☑ **G2** | *(landed + wired; the confusion pathway is live but has no in-game gas source until G9)* **Status-effect layer** — new pure `status.ts`: a duration/stacking/decay model plus the Brogue status set (confusion, hallucination, levitation, telepathy, haste, slow, darkness, paralysis, discord, nausea, shielding, negation, fire immunity). Player carries only `poison` today. Wire one per-turn decay world-system + protocol field; **fixes the inert confusion gas**. | M | — |
+| ☑ **G3** | *(landed + wired; `actMonster` now paths and tracks scent)* **Scent map + real monster AI** — new pure `scent.ts` (decaying diffusion field the player emits, Brogue's actual pursuit substrate) and switch `actMonster` from sign-stepping to `pathfind.ts` + scent-following, with the Brogue chance-to-lose-the-track. | M | — |
+| ☑ **G13** | *(landed + wired. Layering deliberately deferred — see the `terrain.ts` header for the decision and its cost. Statues + luminescent fungus still open; placement is G14)* **Terrain breadth + layer model** — Brogue cells stack layers (dungeon / liquid / surface / gas); Delve has one `TerrainKind` per cell. Add the layer model, then: deep vs shallow water (deep drops pack items, allows swimming), **real lava**, chasm-as-fast-descent, bog, spider webs, creeping lichen, bridges, statues, luminescent fungus, **secret doors**. | L | — |
 
 ### Item kit (the largest single fidelity block)
 

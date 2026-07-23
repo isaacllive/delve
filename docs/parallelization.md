@@ -115,10 +115,26 @@ rules. That wiring is the integration pass below.
   one file two agents both had a claim on (`gameServer.ts`) was off-limits to
   all of them, and that is exactly why.
 
-### ⚠️ Integration pass (SERIAL — the next task)
+### ☑ Integration pass — LANDED
 
-Each agent returned a precise integration note. Apply in this order, because
-they touch the same functions:
+Applied in the order below, each verified live over the wire. **577 tests, 0
+type errors.** Wave 3 now changes how the game actually plays.
+
+Two things worth carrying forward:
+
+- **The agents' integration notes were accurate and saved real time**, but two
+  needed correcting: G2 proposed decaying monster statuses on the *player's*
+  turn (which would let hasting a monster stretch its afflictions), and G13's
+  per-turn contact damage would have double-charged the turn you step into
+  lava. Read the notes; don't apply them blind.
+- **Fixing a dead code path does not make it reachable.** Confusion gas now
+  resolves for delvers and monsters alike — but nothing in the game emits
+  confusion gas (`applyPotionImpact` produces caustic and fire only, and the
+  catalog has no Potion of Confusion). The audit bug is fixed; the *content*
+  to trigger it is **G9**.
+
+The original plan, for reference — apply in this order, because they touch the
+same functions:
 
 1. **G3** — `actMonster` rewrite to call `decideMonsterAction`; scent field on
    `Run` + a world-system that advances it *before* monster turns. Watch: the
