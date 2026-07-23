@@ -44,6 +44,28 @@
   };
   const hunger = $derived(HUNGER_UI[hungerLevel(me?.nutrition ?? 2150)]);
 
+  // Active conditions. One chip per status, driven by the status vocabulary
+  // rather than a hand-written check per kind, so a newly-resolved condition
+  // shows up here without a change. `bad: false` marks the boons. (The full
+  // sidebar treatment — monster statuses, health bars — is gap G17.)
+  const STATUS_LOOK: Record<string, { glyph: string; hint: string; bad?: boolean }> = {
+    poisoned: { glyph: '🤢', hint: 'Poisoned — losing health each turn' },
+    confused: { glyph: '💫', hint: 'Confused — your steps veer astray' },
+    entangled: { glyph: '🕸', hint: 'Entangled — a turn spent tearing free' },
+    paralyzed: { glyph: '🧊', hint: 'Paralyzed — you cannot act' },
+    slowed: { glyph: '🐌', hint: 'Slowed — everything else moves twice' },
+    darkened: { glyph: '🌑', hint: 'Darkened — your light is smothered' },
+    nauseous: { glyph: '🤮', hint: 'Nauseous' },
+    discordant: { glyph: '🌀', hint: 'Discordant' },
+    negated: { glyph: '🚫', hint: 'Negated — magic suppressed' },
+    hallucinating: { glyph: '🍄', hint: 'Hallucinating — trust nothing you see' },
+    hasted: { glyph: '⚡', hint: 'Hasted — you act twice as often', bad: false },
+    levitating: { glyph: '🎈', hint: 'Levitating — floating over what lies below', bad: false },
+    shielded: { glyph: '🛡', hint: 'Shielded — damage absorbed', bad: false },
+    fireImmune: { glyph: '🔥', hint: 'Fire immune', bad: false },
+    telepathic: { glyph: '👁', hint: 'Telepathic', bad: false },
+  };
+
   // Inventory (consumables) — appearance until discovered, keyed to the seed.
   const identities = $derived(client.seed ? makeIdentities(client.seed) : null);
   const discovered = $derived(new Set(client.discovered));
@@ -92,7 +114,11 @@
         <div class="chips">
           <span class="chip str" title="Strength — raised only by a Potion of Strength">💪 {me.strength}</span>
           <span class="chip gold" title="Gold">🪙 {me.gold}</span>
-          {#if me.poison > 0}<span class="chip bad" title="Poisoned — losing 1 HP per turn">🤢 {me.poison}</span>{/if}
+          {#each me.statuses as s (s.kind)}
+            <span class="chip {STATUS_LOOK[s.kind]?.bad === false ? 'good' : 'bad'}" title="{STATUS_LOOK[s.kind]?.hint ?? s.kind} — {s.turns} turns left">
+              {STATUS_LOOK[s.kind]?.glyph ?? '✦'} {s.turns}
+            </span>
+          {/each}
           {#if hunger.label}<span class="chip {hunger.cls}" title="Eat a ration before you starve">{hunger.glyph} {hunger.label}</span>{/if}
           {#if client.hasAmulet}<span class="chip amulet" title="You bear the Amulet of Yendor — escape to the surface!">🏆 Amulet</span>{/if}
         </div>
@@ -312,6 +338,11 @@
   .chip.bad {
     color: #ff7a7a;
     background: rgba(255, 80, 80, 0.16);
+  }
+  /* Boons read cool/green so a glance separates them from afflictions. */
+  .chip.good {
+    color: #7ce0a8;
+    background: rgba(90, 220, 150, 0.15);
   }
   .chip.amulet {
     color: #ffe08a;

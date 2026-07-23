@@ -70,7 +70,21 @@ import {
   type HazardField,
 } from '../game/hazards.ts';
 import { mirrorGuardians, type GuardianPos } from '../game/guardians.ts';
-import { afflict, decayStatuses, emptyStatuses, hasStatus, isEntangled } from '../game/status.ts';
+import {
+  absorbDamage,
+  afflict,
+  canAct,
+  decayStatuses,
+  effectiveActionTicks,
+  emptyStatuses,
+  hasStatus,
+  isEntangled,
+  poison,
+  poisonDamage,
+  resolveFireDamage,
+  resolveStep,
+  statusTurns,
+} from '../game/status.ts';
 import { cellIndex } from '../game/grid.ts';
 import { emitScent, makeScentFieldForLevel, stepScent, type ScentField } from '../game/scent.ts';
 import { decideMonsterAction } from '../game/monsterAi.ts';
@@ -389,7 +403,6 @@ function joinRun(
     // Brogue-faithful: everyone starts at Strength 12, regardless of class.
     // (Starting HP is still class-driven pending the classless refocus.)
     strength: STARTING_STRENGTH,
-    poison: 0,
     statuses: [...emptyStatuses()],
     nutrition: STOMACH_SIZE,
     gold: 0,
@@ -669,6 +682,13 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
   const st = player.state;
   if (!st.alive) return; // the fallen do not move
   const level = getLevel(run.dungeon, st.level);
+  // Frozen solid: the turn still burns, which is exactly what makes paralysis
+  // frightening — the ogre beside you gets its swings for free.
+  if (!canAct(st.statuses)) {
+    send(player.ws, { t: 'log', text: `You are frozen in place!` });
+    endPlayerTurn(run, player);
+    return;
+  }
   // Held fast in silk: the turn goes on tearing free, not on going anywhere.
   // The status decays on the same turn clock, so the struggle is finite.
   if (isEntangled(st.statuses)) {
@@ -676,10 +696,15 @@ function handleMove(run: Run, player: Player, dcol: number, drow: number): void 
     endPlayerTurn(run, player);
     return;
   }
-  const dx = Math.sign(dcol);
-  const dy = Math.sign(drow);
+  // Confusion scrambles where the step actually lands. resolveStep normalizes
+  // the intent to one cell and only touches the RNG when the delver is actually
+  // confused, so an unafflicted move cannot perturb the shared random stream.
+  const step = resolveStep(st.statuses, dcol, drow, run.combatRng);
+  const dx = step.dcol;
+  const dy = step.drow;
   if (dx === 0 && dy === 0) return;
-  // Face the way we're heading even if the step is blocked (turn in place).
+  // Face where the step actually went, not where it was aimed — staggering into
+  // a wall you did not choose is the tell that you are confused.
   st.facing = headingOf(dx, dy);
   const nc = st.col + dx;
   const nr = st.row + dy;
@@ -1242,6 +1267,10 @@ function handleWait(run: Run, player: Player): void {
 // gas damage any actor standing in them; a delver burning to death is permadeath.
 
 const FIRE_DAMAGE_PER_TURN = 8;
+/** Turns of confusion applied per turn spent in a confusion cloud. Refreshed
+ *  (not stacked), so lingering in the fumes keeps you addled for about this long
+ *  after you finally stumble clear. */
+const CONFUSION_TURNS_PER_GAS_TICK = 3;
 const CAUSTIC_DAMAGE_PER_TURN = 3;
 /** Throw range in cells for a hurled potion. */
 const THROW_RANGE = 7;
@@ -1292,12 +1321,26 @@ function hazardHitPlayer(run: Run, floor: number, player: Player, field: HazardF
   let dmg = 0;
   let cause = '';
   if (fire > 0) {
-    dmg += Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire));
-    cause = 'the flames';
+    // Fire immunity is a status, so the flames simply do nothing to you.
+    const burn = resolveFireDamage(st.statuses, Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire)));
+    if (burn > 0) {
+      dmg += burn;
+      cause = 'the flames';
+    }
   }
   if (gas && gas.kind === 'caustic') {
     dmg += Math.max(1, Math.round(CAUSTIC_DAMAGE_PER_TURN * Math.min(1, gas.concentration)));
     cause = cause ? 'fire and gas' : 'caustic gas';
+  }
+  // Confusion gas finally does something. It was simulated and drawn from the
+  // day hazards.ts landed, but nothing ever read it — there was no status layer
+  // to afflict. Because afflict REFRESHES rather than stacks, standing in the
+  // cloud tops the duration up each turn instead of accruing an unrecoverable
+  // one, so walking out of it always ends the confusion shortly after.
+  if (gas && gas.kind === 'confusion') {
+    const before = hasStatus(st.statuses, 'confused');
+    st.statuses = [...afflict(st.statuses, 'confused', CONFUSION_TURNS_PER_GAS_TICK)];
+    if (!before) send(player.ws, { t: 'log', text: `The fumes set your head spinning!` });
   }
   if (dmg <= 0) return;
   damagePlayer(run, player, dmg, {
@@ -1320,9 +1363,14 @@ function stepFloorHazards(run: Run, floor: number): void {
     if (m.hp <= 0) continue;
     const fire = fireAt(field, m.col, m.row);
     const gas = gasAt(field, m.col, m.row);
+    const burn = fire > 0 ? Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire)) : 0;
     const dmg =
-      (fire > 0 ? Math.max(1, Math.round(FIRE_DAMAGE_PER_TURN * fire)) : 0) +
+      resolveFireDamage(m.statuses ?? [], burn) +
       (gas && gas.kind === 'caustic' ? Math.max(1, Math.round(CAUSTIC_DAMAGE_PER_TURN * Math.min(1, gas.concentration))) : 0);
+    // Gas grenades cut both ways: a confused monster staggers just like you do.
+    if (gas && gas.kind === 'confusion') {
+      m.statuses = afflict(m.statuses ?? [], 'confused', CONFUSION_TURNS_PER_GAS_TICK);
+    }
     damageMonster(run, floor, m, dmg, { wake: true });
   }
 }
@@ -1358,7 +1406,15 @@ function monsterBite(run: Run, floor: number, m: Monster, target: Player): void 
     send(target.ws, { t: 'log', text: `The ${m.name} lunges — and misses.` });
     return;
   }
-  const dmg = rollDamage(damageRange(m.damage, 1), 0, run.combatRng);
+  const raw = rollDamage(damageRange(m.damage, 1), 0, run.combatRng);
+  // A magic shield soaks damage until it is spent; absorbDamage returns what
+  // still gets through and the shield's remaining strength.
+  const soak = absorbDamage(st.statuses, raw);
+  st.statuses = [...soak.statuses];
+  if (soak.absorbed > 0) {
+    send(target.ws, { t: 'log', text: `Your shield absorbs ${soak.absorbed}.` });
+  }
+  const dmg = soak.damage;
   const slain = damagePlayer(run, target, dmg, {
     epitaph: `was slain by a ${m.name}`,
     hit: `The ${m.name} hits you for ${dmg}.`,
@@ -1367,8 +1423,13 @@ function monsterBite(run: Run, floor: number, m: Monster, target: Player): void 
   // Venomous monsters leave poison that saps health over the coming turns.
   if (mHas(m, 'poisons')) {
     const stacks = 3 + Math.floor(m.damage / 2);
-    st.poison += stacks;
-    send(target.ws, { t: 'log', text: `Venom courses through you! (poison ${st.poison})` });
+    // Venom is the one condition that genuinely COMPOUNDS — a second bite adds
+    // to the first rather than merely refreshing it (status.ts `poison`).
+    st.statuses = [...poison(st.statuses, stacks)];
+    send(target.ws, {
+      t: 'log',
+      text: `Venom courses through you! (poison ${statusTurns(st.statuses, 'poisoned')})`,
+    });
   }
   // Thieves grab a carried item and bolt (they gain 'flees' for the getaway).
   if (mHas(m, 'stealsAndFlees') && !mHas(m, 'flees')) {
@@ -1455,12 +1516,25 @@ function actMonster(
       summonMinions(run, floor, level, m);
       run.summonCd.set(m.id, SUMMON_COOLDOWN);
       break;
-    case 'move':
-      occupied.delete(m.row * level.cols + m.col);
-      m.col = action.col;
-      m.row = action.row;
-      occupied.add(m.row * level.cols + m.col);
+    case 'move': {
+      // A confused monster staggers just like a confused delver. Scramble the
+      // step the AI chose rather than the AI's reasoning: it still knows where
+      // it wants to go, it just cannot walk straight.
+      const step = resolveStep(m.statuses ?? [], action.col - m.col, action.row - m.row, run.combatRng);
+      const nc = m.col + step.dcol;
+      const nr = m.row + step.drow;
+      // A stagger can land somewhere illegal; a monster that blunders into a
+      // wall simply loses the step, exactly as a delver would.
+      const key = nr * level.cols + nc;
+      const intoTarget = targets.some((t) => t.state.col === nc && t.state.row === nr);
+      if (!blocksMove(level, nc, nr) && !occupied.has(key) && !intoTarget) {
+        occupied.delete(m.row * level.cols + m.col);
+        m.col = nc;
+        m.row = nr;
+        occupied.add(key);
+      }
       break;
+    }
     case 'wait':
       break;
   }
@@ -1482,16 +1556,29 @@ function takeMonsterTurns(run: Run, floor: number, elapsed: number): void {
   const occupied = new Set(monsters.map((m) => m.row * level.cols + m.col));
   const playerProxy: Scheduled = { ticksUntilTurn: elapsed };
   const actors: Scheduled[] = [playerProxy, ...monsters];
-  runUntilPlayer(actors, 0, (i) => actMonster(run, floor, level, monsters[i - 1], occupied, targets));
+  runUntilPlayer(actors, 0, (i) => {
+    const m = monsters[i - 1];
+    // A monster's afflictions tick down on the actions IT takes, not on the
+    // player's turns — otherwise hasting a monster would also stretch every
+    // affliction laid on it, and slowing one would shorten them.
+    const base = canAct(m.statuses ?? []) ? actMonster(run, floor, level, m, occupied, targets) : m.actionTicks;
+    m.statuses = decayStatuses(m.statuses ?? []).statuses;
+    return effectiveActionTicks(m.statuses, base);
+  });
 }
 
-/** Poison tick: a poisoned delver loses 1 HP per turn until it decays to 0.
- *  Resolves permadeath if the venom finishes them. */
+/** Poison tick: a poisoned delver loses HP per turn until the venom runs out.
+ *  Resolves permadeath if it finishes them.
+ *
+ *  The countdown itself is NOT here — poison is a status now, so it decays on
+ *  the one status clock with everything else. This only applies the damage, and
+ *  must run BEFORE the decay system or a one-turn poison would never bite. */
 function maybePoison(run: Run, player: Player): void {
   const st = player.state;
-  if (!st.alive || st.poison <= 0) return;
-  st.poison -= 1;
-  if (damagePlayer(run, player, 1, { epitaph: 'succumbed to poison' })) st.poison = 0;
+  if (!st.alive) return;
+  const dmg = poisonDamage(st.statuses);
+  if (dmg <= 0) return;
+  damagePlayer(run, player, dmg, { epitaph: 'succumbed to poison' });
 }
 
 /** Hunger tick: nutrition drains 1 per turn; once empty, starvation gnaws 1 HP
@@ -1577,7 +1664,7 @@ const WORLD_SYSTEMS: WorldSystem[] = [
       });
     }
     if (props.contactPoison > 0 && st.alive) {
-      st.poison += props.contactPoison;
+      st.statuses = [...poison(st.statuses, props.contactPoison)];
       send(player.ws, { t: 'log', text: `The lichen stings — poison seeps in.` });
     }
   },
@@ -1593,9 +1680,15 @@ const WORLD_SYSTEMS: WorldSystem[] = [
 
 /** End a player's turn: the action is done, so time passes — every world system
  *  runs, then the new state is broadcast. Transitions (stairs/portals/camp) do
- *  NOT call this — they broadcast directly, since you're leaving the floor. */
+ *  NOT call this — they broadcast directly, since you're leaving the floor.
+ *
+ *  `cost` is the action's own price in ticks (a normal turn, or more for heavy
+ *  ground). Haste and slow are applied HERE rather than at each call site, so
+ *  every action a delver can take is scaled by their speed in one place — and a
+ *  new action cannot forget to be. */
 function endPlayerTurn(run: Run, player: Player, cost: number = TICKS_PER_TURN): void {
-  const ctx: TurnContext = { run, player, cost };
+  const spent = effectiveActionTicks(player.state.statuses, cost);
+  const ctx: TurnContext = { run, player, cost: spent };
   for (const system of WORLD_SYSTEMS) system(ctx);
   broadcastState(run);
 }

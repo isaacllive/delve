@@ -56,11 +56,8 @@ export interface PlayerState {
   /** Strength: gates weapon/armor requirements and scales combat via netEnchant
    *  (combat.ts). Starts at 12 and grows ONLY by drinking a Potion of Strength. */
   strength: number;
-  /** Remaining poison — 1 HP lost per turn until it decays to 0 (0 = unpoisoned).
-   *  Predates `statuses` and stays the authoritative source for poison; G2 folds
-   *  it into the status layer rather than running two poison clocks at once. */
-  poison: number;
-  /** Timed afflictions and boons currently on this delver. */
+  /** Timed afflictions and boons currently on this delver, poison among them —
+   *  one clock for every condition, decayed in one place (see status.ts). */
   statuses: StatusEffect[];
   /** Stomach fullness (nutrition). Drains ~1/turn; 0 = starving (see character.ts). */
   nutrition: number;
